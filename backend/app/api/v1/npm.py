@@ -7,6 +7,7 @@ from app.api.deps import CurrentPrincipal, DbSession, SettingsDep
 from app.api.v1.catalog import host_out
 from app.schemas.catalog import (
     ACCESS_PATTERN,
+    CertificateOut,
     DiscoveredHostOut,
     DiscoveredHostUpdate,
     NpmChangeOut,
@@ -16,9 +17,15 @@ from app.schemas.catalog import (
     ProtectionAction,
     ProtectionApply,
     ProtectionPlanOut,
+    PublishApply,
+    PublishPlanOut,
+    PublishRequest,
     SyncResultOut,
+    UnpublishPlanOut,
 )
+from app.services.app_publish import PublishService
 from app.services.npm import NpmService
+from app.services.npm_publish import PublishInput
 from app.services.npm_write import NpmWriteService
 
 router = APIRouter(prefix="/organizations/{org_id}/npm-connections", tags=["npm"])
@@ -44,6 +51,39 @@ def npm_write_service(request: Request, db: DbSession, settings: SettingsDep) ->
 
 
 NpmWriteDep = Annotated[NpmWriteService, Depends(npm_write_service)]
+
+
+def publish_service(request: Request, db: DbSession, settings: SettingsDep) -> PublishService:
+    state = request.app.state
+    return PublishService(
+        db,
+        settings,
+        getattr(state, "npm_client_factory", None),
+        getattr(state, "npm_prober", None),
+        getattr(state, "authentik_client_factory", None),
+        upstream_checker=getattr(state, "upstream_checker", None),
+    )
+
+
+PublishDep = Annotated[PublishService, Depends(publish_service)]
+
+
+def _publish_input(data: PublishRequest) -> PublishInput:
+    return PublishInput(
+        name=data.name.strip(),
+        domain=data.domain,
+        forward_scheme=data.forward_scheme,
+        forward_host=data.forward_host.strip(),
+        forward_port=data.forward_port,
+        certificate_id=data.certificate_id,
+        ssl_forced=data.ssl_forced,
+        websockets=data.websockets,
+        block_exploits=data.block_exploits,
+        security_headers=data.security_headers,
+        theme_css_url=data.theme_css_url,
+        description=(data.description or "").strip() or None,
+        protect=data.protect,
+    )
 
 
 async def _out(svc: NpmService, conn) -> NpmConnectionOut:
@@ -180,3 +220,81 @@ async def list_changes(
     host_id: UUID | None = None,
 ):
     return await svc.list_changes(p, org_id, conn_id, host_id)
+
+
+# ---------------------------------------------------------------- app publiceren (fase 6)
+
+
+@router.get(
+    "/{conn_id}/certificates",
+    response_model=list[CertificateOut],
+    summary="Certificaten in NPM (zonder sleutels), om er een te kiezen bij publiceren",
+    responses={502: {"description": "NPM onbereikbaar of weigert de aanmelding"}},
+)
+async def list_certificates(org_id: UUID, conn_id: UUID, p: CurrentPrincipal, svc: PublishDep):
+    return await svc.certificates(p, org_id, conn_id)
+
+
+@router.post(
+    "/{conn_id}/publish/preview",
+    response_model=PublishPlanOut,
+    summary="Voorbeeld: welke host VaultX in NPM zou aanmaken, en wat er in Authentik gebeurt",
+    responses={502: {"description": "NPM onbereikbaar of weigert de aanmelding"}},
+)
+async def preview_publish(
+    org_id: UUID, conn_id: UUID, data: PublishRequest, p: CurrentPrincipal, svc: PublishDep
+):
+    view = await svc.preview_publish(p, org_id, conn_id, _publish_input(data), data.access)
+    plan = view.plan
+    return PublishPlanOut(
+        domain=plan.domain,
+        can_apply=view.can_apply,
+        checks=[{"code": c.code, "level": c.level, "message": c.message} for c in plan.checks],
+        steps=view.steps,
+        host=plan.body,
+        certificate=plan.certificate,
+        probe_url=view.probe_url,
+        authentik=view.authentik,
+    )
+
+
+@router.post(
+    "/{conn_id}/publish",
+    response_model=NpmChangeOut,
+    summary="App publiceren: host in NPM aanmaken, met Authentik beschermen en in de catalogus zetten",
+    description=(
+        "Geeft altijd het journaal terug. `status`: `applied` (online), `rolled_back` (controle faalde, "
+        "host weer verwijderd en Authentik teruggedraaid), `rollback_failed` (handwerk nodig) of "
+        "`refused` (niets gewijzigd)."
+    ),
+)
+async def publish(org_id: UUID, conn_id: UUID, data: PublishApply, p: CurrentPrincipal, svc: PublishDep):
+    return await svc.publish(p, org_id, conn_id, _publish_input(data), access=data.access, verify=data.verify)
+
+
+@router.get(
+    "/{conn_id}/hosts/{host_id}/unpublish",
+    response_model=UnpublishPlanOut,
+    summary="Voorbeeld: een door VaultX gepubliceerde app weer offline halen",
+    responses={502: {"description": "NPM onbereikbaar of weigert de aanmelding"}},
+)
+async def preview_unpublish(org_id: UUID, conn_id: UUID, host_id: UUID, p: CurrentPrincipal, svc: PublishDep):
+    view = await svc.preview_unpublish(p, org_id, conn_id, host_id)
+    return UnpublishPlanOut(
+        domain=view.host.primary_domain,
+        npm_id=view.host.npm_id,
+        can_apply=view.can_apply,
+        checks=[{"code": c.code, "level": c.level, "message": c.message} for c in view.checks],
+        steps=view.steps,
+        before=view.before,
+        authentik=view.authentik,
+    )
+
+
+@router.post(
+    "/{conn_id}/hosts/{host_id}/unpublish",
+    response_model=NpmChangeOut,
+    summary="Gepubliceerde app offline halen: host uit NPM, opruimen in Authentik en de catalogus",
+)
+async def unpublish(org_id: UUID, conn_id: UUID, host_id: UUID, p: CurrentPrincipal, svc: PublishDep):
+    return await svc.unpublish(p, org_id, conn_id, host_id)

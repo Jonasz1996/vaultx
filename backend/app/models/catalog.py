@@ -82,6 +82,9 @@ class NpmConnection(TimestampMixin, Base):
     # Fase 4: outpost (pk in Authentik) waaraan VaultX de proxy providers toewijst die het zelf
     # aanmaakt. Leeg = VaultX maakt in Authentik niets aan (zoals in fase 3).
     authentik_outpost_pk: Mapped[str | None] = mapped_column(String(64))
+    # Fase 6: standaard CSS-thema voor apps die VaultX publiceert, met {app} voor de naam van de
+    # app, bv. https://css.example.be/{app}.css. Leeg = geen thema.
+    theme_css_template: Mapped[str | None] = mapped_column(String(2048))
 
     hosts = relationship(
         "DiscoveredHost", back_populates="connection", cascade="all, delete-orphan", passive_deletes=True
@@ -160,6 +163,9 @@ class DiscoveredHost(Base):
     warnings: Mapped[list[dict[str, str]]] = mapped_column(JSONB, default=list)
     # Authentik-config staat er door VaultX op (fase 3, zie services/npm_protect.py).
     vaultx_managed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # Fase 6: VaultX maakte deze host zelf aan ("App publiceren") en mag hem dus ook verwijderen.
+    # Een sync raakt dit veld niet aan.
+    vaultx_published: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     # Door de gebruiker genegeerd: krijgt geen catalogusitem (label vaultx.ignore werkt ook).
     ignored: Mapped[bool] = mapped_column(Boolean, default=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -189,11 +195,16 @@ class NpmChange(Base):
     `before` is de momentopname waarmee VaultX terugzet; bij rollback_failed is
     dat ook wat je met de hand terugzet. Eén lopende wijziging per host tegelijk
     (unieke index), ook over meerdere VaultX-nodes heen.
+
+    Fase 6: `publish` maakt een nieuwe host aan. Zolang die loopt, staat npm_id op
+    0 (NPM kent nog geen id), zodat er per koppeling één publicatie tegelijk loopt.
+    `unpublish` verwijdert een host die VaultX publiceerde; `before` is dan de
+    volledige host, om hem desnoods met de hand opnieuw aan te maken.
     """
 
     __tablename__ = "npm_changes"
     __table_args__ = (
-        CheckConstraint("action IN ('protect','unprotect')", name="action_valid"),
+        CheckConstraint("action IN ('protect','unprotect','publish','unpublish')", name="action_valid"),
         CheckConstraint(
             "status IN ('running','applied','rolled_back','rollback_failed','refused','interrupted')",
             name="status_valid",
