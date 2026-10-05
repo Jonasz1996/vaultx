@@ -257,8 +257,9 @@ export function AutoLoginCard({ orgId, app, manage }: { orgId: string; app: Appl
           <dd>{accessText(l)}</dd>
         </dl>
         <p className="muted small">
-          De app zelf stelt VaultX niet in: vul de instellingen in de app in (Instellingen tonen) en meld je daarna aan
-          om te testen.
+          {manage
+            ? "De app zelf stelt VaultX niet in: vul de instellingen in de app in (Instellingen tonen) en meld je daarna aan om te testen."
+            : "Een beheerder vult de instellingen in de app in. Daarna meld je je aan via Authentik."}
         </p>
         {manage && (
           <div className="row wrap">

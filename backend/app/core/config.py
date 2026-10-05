@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     authentik_api_token: SecretStr | None = None
     authentik_verify_tls: bool = True
     authentik_http_timeout_seconds: float = 15.0
-    # Flows voor de proxy providers die VaultX aanmaakt (slugs, standaard die van Authentik zelf).
+    # Flows voor de proxy- en OAuth2-providers die VaultX aanmaakt (slugs, standaard die van Authentik zelf).
     authentik_authorization_flow: str = "default-provider-authorization-implicit-consent"
     authentik_invalidation_flow: str = "default-provider-invalidation-flow"
     # Automatische login (fase 5): publieke URL van Authentik zoals browsers en apps hem gebruiken

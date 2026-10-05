@@ -64,6 +64,9 @@ from bitwarden_e2e import free_port, login, step  # noqa: E402
 
 from tests.fake_oidc import FakeOIDCProvider  # noqa: E402
 
+# De test-app draait op localhost, dus heet de provider die VaultX aanmaakt altijd zo. Opruimen en
+# controles blijven daartoe beperkt: andere automatische logins in dezelfde Authentik blijven staan.
+TEST_PROVIDER = "VaultX login: localhost"
 DB = os.environ.get("VAULTX_DATABASE_URL", "postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_test")
 CSRF = {"X-VaultX-CSRF": "1"}
 # Rechten van het serviceaccount: exact de lijst uit docs/autologin.md (fase 4 + fase 5).
@@ -320,7 +323,9 @@ def main() -> None:
     ak = Authentik(authentik, args.authentik_token)
     step("Authentik voorbereiden: serviceaccount met beperkte rechten, groepen en gebruikers")
     ak.wait_ready("default-provider-authorization-implicit-consent")
-    for prov in ak.get("/providers/oauth2/", search="VaultX login: "):
+    for prov in ak.get("/providers/oauth2/", search=TEST_PROVIDER):
+        if not prov["name"].startswith(TEST_PROVIDER):
+            continue
         if prov["assigned_application_slug"]:
             ak.c.delete(f"/core/applications/{prov['assigned_application_slug']}/")
         ak.c.delete(f"/providers/oauth2/{prov['pk']}/")
@@ -391,7 +396,7 @@ def main() -> None:
         for s in plan["steps"]:
             print(f"      - {s}")
         assert plan["groups"] == [f"vaultx:{slug}", f"vaultx:{slug}:admin"], plan["groups"]
-        assert not ak.get("/providers/oauth2/", search="VaultX login: ")
+        assert not ak.get("/providers/oauth2/", search=TEST_PROVIDER)
 
         step("Inrichten: Authentik-provider, applicatie en groepsbinding")
         started = time.monotonic()
@@ -399,7 +404,7 @@ def main() -> None:
         assert r.status_code == 201, r.text
         login_row = r.json()
         print(f"    klaar in {time.monotonic() - started:.1f}s")
-        provider = ak.one("/providers/oauth2/", search="VaultX login: ")
+        provider = ak.one("/providers/oauth2/", search=TEST_PROVIDER)
         assert provider and provider["client_id"] == login_row["client_id"], provider
         assert [u["url"] for u in provider["redirect_uris"]] == [testapp.redirect_uri], provider
         assert provider["signing_key"], "ID-tokens horen RS256 getekend te zijn"
@@ -425,7 +430,7 @@ def main() -> None:
         step("Weghalen: provider en applicatie in Authentik opgeruimd")
         r = admin.post(f"{lbase}/remove", json={})
         assert r.status_code == 200 and r.json() is None, r.text
-        assert not ak.get("/providers/oauth2/", search="VaultX login: ")
+        assert not ak.get("/providers/oauth2/", search=TEST_PROVIDER)
         assert (
             ak.one("/core/applications/", slug=login_row["application_slug"], superuser_full_list="true")
             is None

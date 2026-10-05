@@ -223,9 +223,10 @@ class NpmService:
             host.application = None
             details["unlinked_application"] = app.name
             await self.db.flush()
-            # Een automatisch aangemaakt item zonder andere hosts heeft geen bestaansreden meer.
-            await self.db.refresh(app, ["hosts"])
-            if app.source == AppSource.npm.value and app.auto_update and not app.hosts:
+            # Een automatisch aangemaakt item zonder andere hosts heeft geen bestaansreden meer,
+            # tenzij het een automatische login heeft (fase 5): dan blijft het, zoals bij verwijderen.
+            await self.db.refresh(app, ["hosts", "login"])
+            if app.source == AppSource.npm.value and app.auto_update and not app.hosts and app.login is None:
                 await self.apps.delete(app)
                 details["deleted_application"] = app.name
         await self.audit.record(

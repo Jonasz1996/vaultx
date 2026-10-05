@@ -3,7 +3,8 @@
 from sqlalchemy import text
 
 from app.core.db import get_engine
-from app.services.app_login import login_slug, normalize_app_url, valid_redirect_uri
+from app.repositories import AppLoginRepository
+from app.services.app_login import login_provider_name, login_slug, normalize_app_url, valid_redirect_uri
 from tests.fake_authentik import FakeAuthentik
 from tests.fake_npm import proxy_host
 
@@ -17,6 +18,25 @@ async def _org_app(admin, fake_authentik: FakeAuthentik, *, url="https://wiki.do
     body = {"name": "Wiki", "app_type": "wiki", "url": url}
     a = (await admin.post_json(f"/api/v1/organizations/{org['id']}/applications", body)).json()
     return org, a, f"/api/v1/organizations/{org['id']}/applications/{a['id']}"
+
+
+async def _npm_app(admin, fake_npm, fake_authentik: FakeAuthentik):
+    """Een app die de NPM-sync zelf in de catalogus zette (host wiki.domain.be)."""
+    host = proxy_host(1, ["wiki.domain.be"], forward_host="wiki", forward_port=8080, certificate_id=1)
+    fake_npm.hosts = [host]
+    org = (await admin.post_json("/api/v1/organizations", {"slug": "acme", "name": "Acme"})).json()
+    fake_authentik.add_group("vaultx:acme")
+    body = {
+        "name": "NPM",
+        "base_url": "http://npm.lan:81",
+        "identity": "admin@example.com",
+        "secret": "npm-secret",
+    }
+    conn = (await admin.post_json(f"/api/v1/organizations/{org['id']}/npm-connections", body)).json()
+    nbase = f"/api/v1/organizations/{org['id']}/npm-connections/{conn['id']}"
+    assert (await admin.post_json(f"{nbase}/sync", {})).status_code == 200
+    [a] = (await admin.get("/api/v1/catalog")).json()
+    return nbase, f"/api/v1/organizations/{org['id']}/applications/{a['id']}"
 
 
 def _codes(plan):
@@ -104,15 +124,19 @@ async def test_configure_view_config_and_remove(admin, fake_authentik):
 
 async def test_redirect_uri_validation(admin, fake_authentik):
     _, _, base = await _org_app(admin, fake_authentik)
-    r = await admin.post_json(f"{base}/login/preview", {"redirect_uris": []})
-    assert r.status_code == 422, "minstens één redirect URI"
-    plan = (await admin.post_json(f"{base}/login/preview", {"redirect_uris": ["  "]})).json()
-    assert _codes(plan)["login_redirect_missing"] == "block"
+    # Geen redirect URI: een leesbare blokkade in het voorbeeld, geen ruwe validatiefout.
+    for empty in ({}, {"redirect_uris": []}, {"redirect_uris": ["  "]}):
+        r = await admin.post_json(f"{base}/login/preview", empty)
+        assert r.status_code == 200, r.text
+        assert _codes(r.json())["login_redirect_missing"] == "block"
+    r = await admin.post_json(f"{base}/login", {"redirect_uris": []})
+    assert r.status_code == 422 and "redirect URI" in r.json()["detail"]
     bad = {"redirect_uris": ["javascript:alert(1)", "/relatief"]}
     plan = (await admin.post_json(f"{base}/login/preview", bad)).json()
     assert _codes(plan)["login_redirect_invalid"] == "block" and not plan["can_apply"]
-    plan = (await admin.post_json(f"{base}/login/preview", {"redirect_uris": ["http://wiki.lan/cb"]})).json()
-    assert plan["can_apply"] and _codes(plan)["login_http"] == "warn"
+    for http in ("http://wiki.lan/cb", "HTTP://wiki.lan/cb"):
+        plan = (await admin.post_json(f"{base}/login/preview", {"redirect_uris": [http]})).json()
+        assert plan["can_apply"] and _codes(plan)["login_http"] == "warn", http
     # Dubbele en lege regels vallen weg.
     double = {"redirect_uris": [REDIRECT, "", REDIRECT]}
     plan = (await admin.post_json(f"{base}/login/preview", double)).json()
@@ -141,6 +165,43 @@ async def test_authentik_failure_midway_is_undone(admin, fake_authentik):
     assert (await admin.get(f"{base}/login")).json()["login"] is None
     audit = (await admin.get("/api/v1/audit", params={"action": "app_login.configure"})).json()["items"]
     assert audit[0]["outcome"] == "failure"
+
+
+async def test_concurrent_setup_is_undone_and_audited(admin, fake_authentik, monkeypatch):
+    """Twee beheerders tegelijk: de tweede botst op de unieke rij en ruimt Authentik weer op."""
+    _, _, base = await _org_app(admin, fake_authentik)
+    body = {"redirect_uris": [REDIRECT]}
+    assert (await admin.post_json(f"{base}/login", body)).status_code == 201
+
+    async def none(self, application_id):
+        return None
+
+    # Zoals een tweede verzoek dat het voorbeeld deed voor het eerste bewaard was.
+    monkeypatch.setattr(AppLoginRepository, "for_application", none)
+    r = await admin.post_json(f"{base}/login", body)
+    assert r.status_code == 409 and "draaide terug" in r.json()["detail"], r.text
+    assert len(fake_authentik.oauth2()) == 1 and list(fake_authentik.applications) == [
+        "vaultx-login-wiki-domain-be"
+    ]
+    audit = (await admin.get("/api/v1/audit", params={"action": "app_login.configure"})).json()["items"]
+    assert [e["outcome"] for e in audit] == ["failure", "success"]
+
+    # Lukt het opruimen niet, dan staat in de melding wat er met de hand weg moet.
+    fake_authentik.fail["DELETE /core/applications/"] = (500, {"detail": "boom"})
+    r = await admin.post_json(f"{base}/login", body)
+    assert r.status_code == 409 and "vaultx-login-wiki-domain-be-2" in r.json()["detail"], r.text
+
+
+async def test_ignoring_the_host_keeps_an_app_with_login(admin, fake_npm, fake_authentik):
+    """Een NPM-host negeren verwijdert een automatisch aangemaakte app niet als ze een login heeft."""
+    nbase, base = await _npm_app(admin, fake_npm, fake_authentik)
+    assert (await admin.post_json(f"{base}/login", {"redirect_uris": [REDIRECT]})).status_code == 201
+    [host] = (await admin.get(f"{nbase}/hosts")).json()
+    r = await admin.patch_json(f"{nbase}/hosts/{host['id']}", {"ignored": True})
+    assert r.status_code == 200, r.text
+    kept = (await admin.get(base)).json()
+    assert kept["auto_login"] is True and kept["hosts"] == []
+    assert fake_authentik.oauth2()
 
 
 async def test_cleanup_failure_is_kept_for_manual_work(admin, fake_authentik):
@@ -185,21 +246,7 @@ async def test_provider_name_collision_gets_suffix(admin, fake_authentik):
 
 async def test_app_url_from_npm_host(admin, fake_npm, fake_authentik):
     """Een app uit de NPM-sync krijgt de URL van zijn proxy host als voorstel."""
-    host = proxy_host(1, ["wiki.domain.be"], forward_host="wiki", forward_port=8080, certificate_id=1)
-    fake_npm.hosts = [host]
-    org = (await admin.post_json("/api/v1/organizations", {"slug": "acme", "name": "Acme"})).json()
-    fake_authentik.add_group("vaultx:acme")
-    body = {
-        "name": "NPM",
-        "base_url": "http://npm.lan:81",
-        "identity": "admin@example.com",
-        "secret": "npm-secret",
-    }
-    conn = (await admin.post_json(f"/api/v1/organizations/{org['id']}/npm-connections", body)).json()
-    nbase = f"/api/v1/organizations/{org['id']}/npm-connections/{conn['id']}"
-    assert (await admin.post_json(f"{nbase}/sync", {})).status_code == 200
-    [a] = (await admin.get("/api/v1/catalog")).json()
-    base = f"/api/v1/organizations/{org['id']}/applications/{a['id']}"
+    _, base = await _npm_app(admin, fake_npm, fake_authentik)
     assert (await admin.get(f"{base}/login")).json()["suggested_app_url"] == "https://wiki.domain.be"
     r = await admin.post_json(f"{base}/login", {"redirect_uris": [REDIRECT]})
     assert r.status_code == 201, r.text
@@ -229,12 +276,31 @@ async def test_members_cannot_configure_or_see_config(admin, make_client, fake_a
 def test_url_helpers():
     assert normalize_app_url("https://wiki.domain.be/") == "https://wiki.domain.be"
     assert normalize_app_url("https://wiki.domain.be:8443/sub/") == "https://wiki.domain.be:8443/sub"
-    for bad in (None, "", "ftp://x", "https://x/?a=1", "https://x:99999", "wiki.domain.be"):
+    for bad in (
+        None,
+        "",
+        "ftp://x",
+        "https://x/?a=1",
+        "https://x:99999",
+        "wiki.domain.be",
+        "https://user:pw@wiki.domain.be/",
+        "https://x/#",
+    ):
         assert normalize_app_url(bad) is None, bad
     assert valid_redirect_uri("https://wiki.domain.be/cb?x=1")
     assert valid_redirect_uri("http://10.0.0.5:8006")
-    for bad in ("javascript:alert(1)", "/cb", "https://x/cb#frag", "https://x/c b", "https://:80/cb"):
+    for bad in (
+        "javascript:alert(1)",
+        "/cb",
+        "https://x/cb#frag",
+        "https://x/cb#",
+        "https://x/c b",
+        "https://:80/cb",
+        "https://user:pw@x/cb",
+    ):
         assert not valid_redirect_uri(bad), bad
     assert login_slug("wiki.domain.be") == "vaultx-login-wiki-domain-be"
     assert login_slug("wiki.domain.be", 1) == "vaultx-login-wiki-domain-be-2"
     assert len(login_slug("a" * 80 + ".be", 3)) <= 50
+    # Een hostnaam mag 253 tekens lang zijn; de providernaam moet in 255 tekens passen.
+    assert len(login_provider_name(".".join(["a" * 60] * 4) + ".be", 4)) <= 255

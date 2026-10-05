@@ -1,6 +1,7 @@
 """Schema's voor automatische login (fase 5)."""
 
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -10,8 +11,8 @@ from app.schemas.common import ORMModel
 
 
 class AppLoginIn(BaseModel):
-    redirect_uris: list[str] = Field(
-        min_length=1,
+    redirect_uris: list[Annotated[str, Field(max_length=2048)]] = Field(
+        default_factory=list,
         max_length=10,
         description="Redirect URI's van de app (staan in de documentatie van de app)",
     )

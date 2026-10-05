@@ -27,7 +27,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -49,6 +49,8 @@ from app.services.principal import Principal
 PROVIDER_PREFIX = "VaultX login: "
 SLUG_PREFIX = "vaultx-login-"
 MAX_SLUG = 50
+# provider_name is String(255): prefix + domein + " (n)" moet daarin passen.
+MAX_NAME_DOMAIN = 255 - len(PROVIDER_PREFIX) - 6
 # Scopes die de provider meekrijgt (beheerde scope mappings van Authentik).
 SCOPES = ("openid", "email", "profile", "offline_access")
 SCOPE_MANAGED = {s: f"goauthentik.io/providers/oauth2/scope-{s}" for s in SCOPES}
@@ -63,7 +65,7 @@ def login_slug(domain: str, attempt: int = 0) -> str:
 
 
 def login_provider_name(domain: str, attempt: int = 0) -> str:
-    return PROVIDER_PREFIX + domain + (f" ({attempt + 1})" if attempt else "")
+    return PROVIDER_PREFIX + domain[:MAX_NAME_DOMAIN] + (f" ({attempt + 1})" if attempt else "")
 
 
 def normalize_app_url(url: str | None) -> str | None:
@@ -75,13 +77,16 @@ def normalize_app_url(url: str | None) -> str | None:
         parts.port  # noqa: B018 - gooit ValueError bij een ongeldige poort
     except ValueError:
         return None
-    if parts.scheme not in ("http", "https") or not parts.hostname or parts.query or parts.fragment:
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.query or "#" in url:
+        return None
+    if parts.username or parts.password:
         return None
     return f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}"
 
 
 def valid_redirect_uri(uri: str) -> bool:
-    """Een redirect URI moet een absolute http(s)-URL zijn, zonder fragment."""
+    """Een redirect URI moet een absolute http(s)-URL zijn, zonder fragment (RFC 6749 §3.1.2) en
+    zonder gebruikersnaam of wachtwoord."""
     try:
         parts = urlsplit(uri)
         parts.port  # noqa: B018
@@ -90,7 +95,8 @@ def valid_redirect_uri(uri: str) -> bool:
     return (
         parts.scheme in ("http", "https")
         and bool(parts.hostname)
-        and not parts.fragment
+        and "#" not in uri
+        and not (parts.username or parts.password)
         and not any(c.isspace() for c in uri)
     )
 
@@ -177,9 +183,6 @@ class LoginPlan:
 
     def warn(self, code: str, message: str) -> None:
         self.checks.append(Check(code, "warn", message))
-
-    def info(self, code: str, message: str) -> None:
-        self.checks.append(Check(code, "info", message))
 
 
 class AppLoginService:
@@ -272,7 +275,7 @@ class AppLoginService:
         for uri in redirects:
             if not valid_redirect_uri(uri):
                 plan.block("login_redirect_invalid", f"Ongeldige redirect URI: {uri}")
-            elif uri.startswith("http://"):
+            elif urlsplit(uri).scheme == "http":
                 plan.warn(
                     "login_http",
                     f"Redirect URI {uri} gaat over http: codes en tokens gaan dan onversleuteld over het "
@@ -389,6 +392,8 @@ class AppLoginService:
                 " ".join(c.message for c in plan.checks if c.level == "block") or "Niet mogelijk"
             )
         app = await self._app(p, org_id, app_id)
+        # Nu al: na een mislukte flush (en rollback) kan p.user niet meer geladen worden.
+        actor = p.actor
         assert plan.app_url is not None
         domain = urlsplit(plan.app_url).hostname or app.name
         state: dict[str, Any] = {
@@ -448,12 +453,42 @@ class AppLoginService:
         self.logins.add(login)
         try:
             await self.db.flush()
-        except IntegrityError as exc:
-            # Iemand anders richtte tegelijk de login voor deze app in: wat VaultX net aanmaakte, weg.
+        except SQLAlchemyError as exc:
+            # Meestal richtte iemand anders tegelijk de login voor deze app in: wat VaultX net in
+            # Authentik aanmaakte, moet weer weg.
             await self.db.rollback()
-            async with self.authentik_factory() as client:
-                await self._undo(client, state)
-            raise ConflictError("Er werd net al een automatische login ingericht voor deze app") from exc
+            try:
+                async with self.authentik_factory() as client:
+                    errors = await self._undo(client, state)
+            except AuthentikError as undo_exc:
+                errors = [undo_exc.message]
+            conflict = isinstance(exc, IntegrityError)
+            message = (
+                "Er werd net al een automatische login ingericht voor deze app."
+                if conflict
+                else "De login kon niet bewaard worden in de database."
+            )
+            if errors:
+                message += (
+                    f" Terugdraaien in Authentik lukte niet volledig (provider "
+                    f"'{state.get('provider_name') or plan.provider_name}', "
+                    f"applicatie '{state.get('slug')}'): " + "; ".join(errors)
+                )
+            else:
+                message += " VaultX draaide terug wat het in Authentik aanmaakte."
+            await self.audit.record(
+                "app_login.configure",
+                actor,
+                outcome="failure",
+                organization_id=org_id,
+                target_type="application",
+                target_id=app_id,
+                details={"app_url": plan.app_url, "error": message[:500]},
+            )
+            await self.db.commit()
+            if conflict:
+                raise ConflictError(message) from exc
+            raise UpstreamError(message) from exc
         login.client_secret_ciphertext = seal_secret(
             self.settings.secret_key.get_secret_value(),
             str(provider.get("client_secret") or ""),

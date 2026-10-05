@@ -5,7 +5,7 @@ bijwerken, proxy providers, OAuth2/OpenID-providers en applicaties aanmaken en
 verwijderen, groepen zoeken en een groep aan een applicatie binden, en de
 standaard scope mappings en het ondertekeningscertificaat vinden. Aanmelden gaat met een API-token van een
 serviceaccount (Authorization: Bearer). Welke rechten dat account nodig heeft,
-staat in docs/npm.md.
+staat in docs/npm.md (fase 4) en docs/autologin.md (fase 5).
 
 Applicaties zoekt VaultX bewust niet via ``GET /core/applications/``: die lijst
 filtert op wat de aanroeper zelf mag openen (onderzoek 02, KB-37). De
