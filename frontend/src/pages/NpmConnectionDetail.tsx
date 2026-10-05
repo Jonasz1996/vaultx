@@ -3,8 +3,9 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api/client";
 import { canManageOrg, useMe } from "../api/hooks";
-import type { DiscoveredHost, NpmConnection, Organization, SyncResult } from "../api/types";
+import type { DiscoveredHost, NpmConnection, Organization, ProtectionAction, SyncResult } from "../api/types";
 import { AuthLabel, ConnectionForm, type ConnectionValues, HostLink, Warnings } from "../components/catalog";
+import { ChangeJournal, ProtectionDialog } from "../components/npmProtection";
 import { Badge, Card, Empty, ErrorBox, Loading, Modal, PageHeader } from "../components/ui";
 import { formatDate, relative } from "../format";
 import { SyncStatus, syncSummary } from "./NpmConnections";
@@ -17,6 +18,7 @@ export function NpmConnectionDetailPage() {
   const [editing, setEditing] = useState(false);
   const [showRemoved, setShowRemoved] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
+  const [protecting, setProtecting] = useState<{ host: DiscoveredHost; action: ProtectionAction } | null>(null);
   const base = `/api/v1/organizations/${orgId}/npm-connections/${connId}`;
   const manage = canManageOrg(me, orgId);
 
@@ -31,6 +33,7 @@ export function NpmConnectionDetailPage() {
     void qc.invalidateQueries({ queryKey: ["npm-hosts", connId] });
     void qc.invalidateQueries({ queryKey: ["npm", orgId] });
     void qc.invalidateQueries({ queryKey: ["catalog"] });
+    void qc.invalidateQueries({ queryKey: ["npm-changes", base] });
   };
   const sync = useMutation({
     mutationFn: () => api.post<SyncResult>(`${base}/sync`),
@@ -117,6 +120,24 @@ export function NpmConnectionDetailPage() {
           <dd>{c.verify_tls ? "ja" : <Badge tone="warn">nee</Badge>}</dd>
           <dt>Automatisch</dt>
           <dd>{c.enabled ? "ja, periodiek" : "nee, enkel handmatig"}</dd>
+          <dt>Wijzigen in NPM</dt>
+          <dd>
+            {c.write_enabled ? (
+              <Badge tone="info">aan</Badge>
+            ) : (
+              <span className="muted">uit{manage && ", aanzetten via Bewerken"}</span>
+            )}
+          </dd>
+          {(c.write_enabled || c.authentik_outpost_url) && (
+            <>
+              <dt>Authentik-outpost</dt>
+              <dd className="mono">{c.authentik_outpost_url ?? <Badge tone="warn">niet ingesteld</Badge>}</dd>
+              <dt>Controleadres</dt>
+              <dd className="mono">
+                {c.probe_host ?? new URL(c.base_url).hostname}, poort {c.probe_http_port} / {c.probe_https_port}
+              </dd>
+            </>
+          )}
         </dl>
       </Card>
       <Card
@@ -168,6 +189,11 @@ export function NpmConnectionDetailPage() {
                     </td>
                     <td>
                       <AuthLabel method={h.detected_auth} />
+                      {h.vaultx_managed && (
+                        <Badge tone="info" title="Authentik-config gezet door VaultX">
+                          door VaultX
+                        </Badge>
+                      )}
                       {h.access_list && <div className="muted small">access list: {h.access_list}</div>}
                       {h.detected_app_type && <div className="mono small muted">{h.detected_app_type}</div>}
                       {Object.keys(h.labels).length > 0 && (
@@ -177,6 +203,27 @@ export function NpmConnectionDetailPage() {
                               {k}={v}
                             </Badge>
                           ))}
+                        </div>
+                      )}
+                      {manage && c.write_enabled && !h.removed_at && (
+                        <div>
+                          {h.vaultx_managed ? (
+                            <button
+                              className="btn btn-ghost small btn-danger-text"
+                              onClick={() => setProtecting({ host: h, action: "unprotect" })}
+                            >
+                              Bescherming weghalen
+                            </button>
+                          ) : (
+                            h.detected_auth !== "forward_auth" && (
+                              <button
+                                className="btn btn-ghost small"
+                                onClick={() => setProtecting({ host: h, action: "protect" })}
+                              >
+                                Beschermen met Authentik
+                              </button>
+                            )
+                          )}
                         </div>
                       )}
                     </td>
@@ -218,9 +265,27 @@ export function NpmConnectionDetailPage() {
           </div>
         )}
       </Card>
+      {manage && (c.write_enabled || hasChanges(all)) && (
+        <Card title="Wijzigingen door VaultX">
+          <ChangeJournal base={base} />
+        </Card>
+      )}
+      {protecting && (
+        <ProtectionDialog
+          base={base}
+          host={protecting.host}
+          action={protecting.action}
+          onClose={() => setProtecting(null)}
+          onDone={invalidate}
+        />
+      )}
       <Modal title="Koppeling bewerken" open={editing} onClose={() => setEditing(false)}>
         <ConnectionForm initial={c} onSubmit={(v) => update.mutate(v)} error={update.error} pending={update.isPending} />
       </Modal>
     </>
   );
+}
+
+function hasChanges(hosts: DiscoveredHost[]): boolean {
+  return hosts.some((h) => h.vaultx_managed);
 }

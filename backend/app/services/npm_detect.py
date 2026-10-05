@@ -33,6 +33,9 @@ AUTHENTIK_OUTPOST = "outpost.goauthentik.io"
 # vervangt de standaardlocatie, en daarmee ook access lists en websocket-headers.
 DEFAULT_LOCATION_RE = re.compile(r"^(?:.*;)?\s*?location\s*?/\s*?\{", re.M | re.I)
 
+# Begin van een blok dat VaultX zelf schreef (zie npm_protect.py).
+MANAGED_MARK = "# >>> vaultx:authentik"
+
 KNOWN_LABELS = {"app", "auth", "type", "tags", "description", "ignore"}
 AUTH_ALIASES = {
     "forward-auth": AuthMethod.forward_auth.value,
@@ -117,6 +120,7 @@ class Detection:
     description: str | None
     ignore: bool
     url: str | None
+    managed: bool = False  # Authentik-config door VaultX gezet (fase 3)
     warnings: list[dict[str, str]] = field(default_factory=list)
 
     def warn(self, code: str, message: str) -> None:
@@ -207,6 +211,7 @@ def analyze(host: dict[str, Any]) -> Detection:
         description=labels.get("description") or None,
         ignore=labels.get("ignore", "").lower() in TRUE_VALUES,
         url=url,
+        managed=any(MANAGED_MARK in cfg for cfg in (host_cfg, *loc_cfgs)),
     )
 
     # Aanmelding: expliciet label > forward auth > access list > onbekend.

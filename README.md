@@ -2,8 +2,17 @@
 
 Self-hosted wachtwoord- en secretsplatform met Authentik als identiteitsbron
 en Nginx Proxy Manager-integratie. Deze repository bevat **phase-0** (de
-fundering), **fase 1** (NPM-connector en applicatiecatalogus) en **fase 2**
-(een persoonlijke kluis voor de officiële Bitwarden®-clients).
+fundering), **fase 1** (NPM-connector en applicatiecatalogus), **fase 2**
+(een persoonlijke kluis voor de officiële Bitwarden®-clients) en **fase 3**
+(Authentik-bescherming zetten in NPM).
+
+**Fase 3**
+
+- Per proxy host met één knop Authentik forward auth zetten of weghalen, volgens het officiële Authentik-patroon voor NPM
+- Eerst een voorbeeld: wat VaultX wijzigt, de config ervoor en erna, en wat het tegenhoudt (bv. "Satisfy Any", een eigen `location /`)
+- Na het schrijven controleert VaultX de host zelf; weigert nginx de config of verwijst de host niet naar Authentik, dan zet VaultX de vorige config terug
+- Journaal van elke wijziging, en auditlog; schrijven staat standaard uit per koppeling
+- Getest tegen een echte NPM 2.16.0 (ook in CI). Zie [docs/npm.md](docs/npm.md#5-authentik-bescherming-zetten)
 
 **Fase 2**
 
@@ -33,7 +42,8 @@ fundering), **fase 1** (NPM-connector en applicatiecatalogus) en **fase 2**
 - Docker Compose, en een handleiding voor een Debian-container zonder Docker
 
 **Nog niet**: gedeelde kluizen (organisaties en collecties), bijlagen, Sends,
-tweestapsverificatie voor de kluis, master password wijzigen, en schrijven naar NPM.
+tweestapsverificatie voor de kluis, master password wijzigen, en de Authentik-kant
+(provider en applicatie) automatisch aanmaken.
 
 ## Snel starten met Docker Compose
 

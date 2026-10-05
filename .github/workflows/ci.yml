@@ -46,6 +46,16 @@ jobs:
   npm-e2e:
     # NPM-connector tegen een echte Nginx Proxy Manager (zie e2e/README.md)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: vaultx
+          POSTGRES_PASSWORD: vaultx
+          POSTGRES_DB: vaultx_e2e
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vaultx" --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,15 +63,26 @@ jobs:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: backend/requirements*.txt
-      - run: pip install -r backend/requirements.txt
+      - run: pip install -r backend/requirements-dev.txt
       - name: Nginx Proxy Manager starten
         run: |
-          docker run -d --name npm -p 81:81 -v npmdata:/data -v npmle:/etc/letsencrypt \
+          docker run -d --name npm -p 81:81 -p 8080:80 -p 8443:443 \
+            -v npmdata:/data -v npmle:/etc/letsencrypt \
             docker.io/jc21/nginx-proxy-manager:2.16.0
           for i in $(seq 1 60); do curl -sf http://localhost:81/api/ && break; sleep 3; done
       - name: Seed en detectie controleren
         working-directory: backend
         run: python ../e2e/npm_e2e.py http://localhost:81 ci@example.com ci-npm-password-123
+      - name: Authentik-bescherming zetten, controleren en terugzetten
+        working-directory: backend
+        env:
+          VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
+        run: |
+          python ../e2e/npm_write_e2e.py http://localhost:81 ci@example.com ci-npm-password-123 \
+            --proxy 127.0.0.1 --http-port 8080 --https-port 8443
+      - name: NPM-log bij een fout
+        if: failure()
+        run: docker logs npm 2>&1 | tail -100
 
   bitwarden-e2e:
     # Officiële Bitwarden CLI tegen de VaultX-backend (zie e2e/README.md)

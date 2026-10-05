@@ -47,3 +47,21 @@ export const statusInfo: Record<string, { label: string; tone: Tone; hint: strin
   offline: { label: "Offline", tone: "bad", hint: "Host uitgeschakeld of nginx-fout in NPM" },
   removed: { label: "Verdwenen", tone: "neutral", hint: "Host staat niet meer in NPM" },
 };
+
+export const changeStatusInfo: Record<string, { label: string; tone: Tone; hint: string }> = {
+  running: { label: "Bezig", tone: "info", hint: "VaultX is de host aan het wijzigen" },
+  applied: { label: "Uitgevoerd", tone: "good", hint: "De wijziging staat in NPM" },
+  rolled_back: { label: "Teruggezet", tone: "warn", hint: "De controle faalde; de vorige config staat er weer" },
+  rollback_failed: {
+    label: "Terugzetten mislukt",
+    tone: "bad",
+    hint: "Zet de vorige config met de hand terug in NPM (zie details)",
+  },
+  refused: { label: "Niet uitgevoerd", tone: "neutral", hint: "VaultX heeft niets gewijzigd" },
+  interrupted: { label: "Onderbroken", tone: "bad", hint: "Kijk de host na in NPM" },
+};
+
+export const actionLabels: Record<string, string> = {
+  protect: "Beschermen",
+  unprotect: "Bescherming weghalen",
+};

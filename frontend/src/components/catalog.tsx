@@ -136,6 +136,11 @@ export interface ConnectionValues {
   secret?: string;
   verify_tls: boolean;
   enabled: boolean;
+  write_enabled: boolean;
+  authentik_outpost_url: string;
+  probe_host: string;
+  probe_http_port: number;
+  probe_https_port: number;
 }
 
 export function ConnectionForm({
@@ -156,6 +161,11 @@ export function ConnectionForm({
   const [secret, setSecret] = useState("");
   const [verifyTls, setVerifyTls] = useState(initial?.verify_tls ?? true);
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+  const [writeEnabled, setWriteEnabled] = useState(initial?.write_enabled ?? false);
+  const [outpost, setOutpost] = useState(initial?.authentik_outpost_url ?? "");
+  const [probeHost, setProbeHost] = useState(initial?.probe_host ?? "");
+  const [httpPort, setHttpPort] = useState(initial?.probe_http_port ?? 80);
+  const [httpsPort, setHttpsPort] = useState(initial?.probe_https_port ?? 443);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     onSubmit({
@@ -165,6 +175,12 @@ export function ConnectionForm({
       ...(secret ? { secret } : {}),
       verify_tls: verifyTls,
       enabled,
+      // Leeg = wissen.
+      write_enabled: writeEnabled,
+      authentik_outpost_url: outpost.trim(),
+      probe_host: probeHost.trim(),
+      probe_http_port: httpPort,
+      probe_https_port: httpsPort,
     });
   };
   return (
@@ -199,8 +215,8 @@ export function ConnectionForm({
           onChange={(e) => setSecret(e.target.value)}
         />
         <small className="muted">
-          Wordt versleuteld opgeslagen en nooit teruggegeven. Gebruik een apart NPM-account zonder 2FA; VaultX
-          leest enkel.
+          Wordt versleuteld opgeslagen en nooit teruggegeven. Gebruik een apart NPM-account zonder 2FA. Om te
+          lezen volstaat "Proxy Hosts: View"; om Authentik-bescherming te zetten is "Manage" nodig.
         </small>
       </label>
       <label className="check">
@@ -211,6 +227,59 @@ export function ConnectionForm({
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         Automatisch synchroniseren
       </label>
+      <fieldset className="form-group">
+        <legend>Authentik-bescherming zetten</legend>
+        <label className="check">
+          <input type="checkbox" checked={writeEnabled} onChange={(e) => setWriteEnabled(e.target.checked)} />
+          VaultX mag proxy hosts in deze NPM wijzigen
+        </label>
+        <small className="muted">
+          Enkel op vraag van een beheerder, per host, met eerst een voorbeeld. Mislukt de controle achteraf, dan
+          zet VaultX de vorige config terug.
+        </small>
+        <label className="field">
+          <span>Authentik-outpost, gezien vanuit NPM</span>
+          <input
+            placeholder="http://authentik-server:9000"
+            value={outpost}
+            onChange={(e) => setOutpost(e.target.value)}
+          />
+          <small className="muted">
+            Het adres waarop nginx in NPM de outpost bereikt, zonder pad. Voor de ingebouwde outpost is dat de
+            Authentik-server zelf.
+          </small>
+        </label>
+        <div className="grid-form grid-probe">
+          <label className="field">
+            <span>Controleadres van NPM</span>
+            <input placeholder="host van de beheer-URL" value={probeHost} onChange={(e) => setProbeHost(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>HTTP-poort</span>
+            <input
+              type="number"
+              min={1}
+              max={65535}
+              value={httpPort}
+              onChange={(e) => setHttpPort(Number(e.target.value))}
+            />
+          </label>
+          <label className="field">
+            <span>HTTPS-poort</span>
+            <input
+              type="number"
+              min={1}
+              max={65535}
+              value={httpsPort}
+              onChange={(e) => setHttpsPort(Number(e.target.value))}
+            />
+          </label>
+        </div>
+        <small className="muted">
+          Hier spreekt VaultX een host aan voor en na een wijziging, met de domeinnaam als Host-header. Leeg =
+          de host van de beheer-URL.
+        </small>
+      </fieldset>
       <ErrorBox error={error} />
       <div className="form-actions">
         <button className="btn btn-primary" disabled={pending}>
