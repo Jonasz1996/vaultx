@@ -190,4 +190,6 @@ fieldset.form-group { border: 1px solid var(--border); border-radius: 8px; paddi
 fieldset.form-group legend { font-weight: 600; padding: 0 4px; }
 .grid-probe { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
 .grid-probe input { min-width: 0; width: 100%; box-sizing: border-box; }
+.grid-upstream { grid-template-columns: minmax(0, 1fr) minmax(0, 3fr) minmax(0, 1fr); }
+.grid-upstream input, .grid-upstream select { min-width: 0; width: 100%; box-sizing: border-box; }
 @media (max-width: 720px) { .config-diff { grid-template-columns: 1fr; } }
