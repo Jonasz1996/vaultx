@@ -1,0 +1,72 @@
+# VaultX phase-0: single-node stack.
+#   cp docker/.env.example docker/.env   # en vul in
+#   docker compose -f docker/docker-compose.yml up -d --build
+name: vaultx
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vaultx
+      POSTGRES_USER: vaultx
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?zet POSTGRES_PASSWORD in docker/.env}
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vaultx -d vaultx"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+
+  migrate:
+    image: vaultx-backend:${VAULTX_VERSION:-dev}
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:${POSTGRES_PASSWORD}@db:5432/vaultx
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks: [internal]
+
+  backend:
+    image: vaultx-backend:${VAULTX_VERSION:-dev}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:${POSTGRES_PASSWORD}@db:5432/vaultx
+      VAULTX_FORWARDED_ALLOW_IPS: "*"  # enkel bereikbaar via het interne netwerk, achter web
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal, egress]
+
+  web:
+    image: vaultx-web:${VAULTX_VERSION:-dev}
+    build:
+      context: ..
+      dockerfile: docker/frontend.Dockerfile
+    restart: unless-stopped
+    environment:
+      VAULTX_BACKEND: backend:8000
+    ports:
+      - "${VAULTX_HTTP_PORT:-8080}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [internal, egress]
+
+volumes:
+  db-data:
+
+networks:
+  # Database enkel bereikbaar voor VaultX zelf.
+  internal:
+    internal: true
+  # Backend moet Authentik kunnen bereiken; web moet publiek bereikbaar zijn.
+  egress: {}
