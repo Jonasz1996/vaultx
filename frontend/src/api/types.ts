@@ -357,8 +357,91 @@ export interface Application {
   auto_update: boolean;
   hosts: ApplicationHost[];
   warning_count: number;
+  auto_login: LoginTemplateKey | null;
   created_at: string;
   updated_at: string;
+}
+
+// Fase 5: automatische login via Authentik (OIDC), optioneel meteen in Grafana gezet.
+export type LoginTemplateKey = "grafana" | "oidc";
+
+export interface LoginTemplate {
+  key: LoginTemplateKey;
+  label: string;
+  description: string;
+  redirect_path: string | null;
+  can_configure_app: boolean;
+}
+
+export interface AppLogin {
+  id: string;
+  application_id: string;
+  template: LoginTemplateKey;
+  app_url: string;
+  redirect_uris: string[];
+  access: string;
+  groups: string[];
+  options: { default_role?: string; admin_groups?: string[] };
+  provider_pk: number;
+  provider_name: string;
+  provider_created: boolean;
+  application_slug: string | null;
+  application_name: string | null;
+  application_created: boolean;
+  client_id: string;
+  app_configured: boolean;
+  app_configured_at: string | null;
+  last_check_at: string | null;
+  last_check_status: "ok" | "failed" | "unknown" | null;
+  last_check_message: string | null;
+  cleanup_error: string | null;
+  created_at: string;
+}
+
+export interface AppLoginState {
+  configured: boolean;
+  authentik_url: string;
+  templates: LoginTemplate[];
+  suggested_app_url: string | null;
+  suggested_grafana_url: string | null;
+  login: AppLogin | null;
+}
+
+export interface GrafanaAdmin {
+  url: string;
+  username: string;
+  password: string;
+}
+
+export interface AppLoginInput {
+  template: LoginTemplateKey;
+  access: string;
+  app_url: string | null;
+  redirect_uris: string[];
+  default_role: "Viewer" | "Editor" | "Admin";
+  grafana: GrafanaAdmin | null;
+}
+
+export interface AppLoginPlan {
+  template: LoginTemplateKey;
+  app_url: string | null;
+  redirect_uris: string[];
+  access: string;
+  can_apply: boolean;
+  checks: ProtectionCheck[];
+  steps: string[];
+  groups: string[];
+  configure_app: boolean;
+}
+
+export interface AppLoginConfig {
+  template: LoginTemplateKey;
+  client_id: string;
+  client_secret: string;
+  issuer: string;
+  discovery_url: string;
+  redirect_uris: string[];
+  files: { name: string; content: string }[];
 }
 
 export interface VaultDevice {

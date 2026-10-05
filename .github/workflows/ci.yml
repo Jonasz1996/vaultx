@@ -153,6 +153,73 @@ jobs:
           docker logs ak-worker 2>&1 | tail -30
           docker logs npm 2>&1 | tail -40
 
+  autologin-e2e:
+    # Fase 5: automatische login voor Grafana via Authentik, tegen echte Authentik en Grafana (zie e2e/README.md)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: vaultx
+          POSTGRES_PASSWORD: vaultx
+          POSTGRES_DB: vaultx_e2e
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vaultx" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      AK_TOKEN: ci-authentik-bootstrap-token-0123456789
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - run: pip install -r backend/requirements-dev.txt playwright==1.56.0
+      - run: python -m playwright install --with-deps chromium
+      - name: Authentik en Grafana starten
+        run: |
+          docker network create ak
+          docker run -d --name ak-db --network ak -e POSTGRES_DB=authentik -e POSTGRES_USER=authentik \
+            -e POSTGRES_PASSWORD=authentik postgres:18-alpine
+          cat > ak.env <<EOF
+          AUTHENTIK_SECRET_KEY=ci-only-authentik-secret-key-0123456789abcdef
+          AUTHENTIK_POSTGRESQL__HOST=ak-db
+          AUTHENTIK_POSTGRESQL__USER=authentik
+          AUTHENTIK_POSTGRESQL__NAME=authentik
+          AUTHENTIK_POSTGRESQL__PASSWORD=authentik
+          AUTHENTIK_BOOTSTRAP_PASSWORD=ci-akadmin-password
+          AUTHENTIK_BOOTSTRAP_TOKEN=$AK_TOKEN
+          AUTHENTIK_BOOTSTRAP_EMAIL=admin@example.com
+          AUTHENTIK_ERROR_REPORTING__ENABLED=false
+          AUTHENTIK_DISABLE_UPDATE_CHECK=true
+          AUTHENTIK_LISTEN__HTTP=0.0.0.0:9000
+          AUTHENTIK_LISTEN__HTTPS=0.0.0.0:9443
+          AUTHENTIK_LISTEN__METRICS=0.0.0.0:9300
+          EOF
+          sed -i 's/^ *//' ak.env
+          docker run -d --name ak-server --network ak -p 9000:9000 --env-file ak.env \
+            docker.io/authentik/server:2026.8.3 server
+          docker run -d --name ak-worker --network ak --env-file ak.env docker.io/authentik/server:2026.8.3 worker
+          # Grafana op het hostnetwerk: zo bereikt het Authentik op localhost:9000, net als de browser.
+          docker run -d --name grafana --network host -e GF_SECURITY_ADMIN_PASSWORD=ci-grafana-password \
+            -e GF_SERVER_ROOT_URL=http://localhost:3000/ docker.io/grafana/grafana:13.2.3
+          for i in $(seq 1 60); do curl -sf http://localhost:3000/api/health && break; sleep 3; done
+          for i in $(seq 1 100); do curl -sf http://localhost:9000/-/health/ready/ && break; sleep 3; done
+      - name: Automatische login inrichten, aanmelden in de browser, weghalen
+        working-directory: backend
+        env:
+          VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
+        run: |
+          python ../e2e/autologin_e2e.py --authentik http://localhost:9000 --authentik-token $AK_TOKEN \
+            --grafana http://localhost:3000 --grafana-password ci-grafana-password --browser
+      - name: Logs bij een fout
+        if: failure()
+        run: |
+          docker logs ak-server 2>&1 | tail -60
+          docker logs ak-worker 2>&1 | tail -30
+          docker logs grafana 2>&1 | tail -40
+
   bitwarden-e2e:
     # Officiële Bitwarden CLI tegen de VaultX-backend (zie e2e/README.md)
     runs-on: ubuntu-latest

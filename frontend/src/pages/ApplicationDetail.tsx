@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { canManageOrg, useMe } from "../api/hooks";
 import type { Application, AuditPage, Organization } from "../api/types";
 import { AuditTable } from "../components/AuditTable";
+import { AutoLoginCard } from "../components/autoLogin";
 import { ApplicationForm, type ApplicationValues, AuthLabel, HostLink, StatusBadge, Warnings } from "../components/catalog";
 import { Badge, Card, Empty, ErrorBox, Loading, Modal, PageHeader } from "../components/ui";
 import { formatDate, relative, statusInfo } from "../format";
@@ -69,6 +70,8 @@ export function ApplicationDetailPage() {
               </button>
               <button
                 className="btn btn-danger"
+                disabled={a.auto_login !== null}
+                title={a.auto_login ? "Haal eerst de automatische login weg" : undefined}
                 onClick={() => {
                   const extra = a.hosts.length
                     ? " De gekoppelde NPM-hosts worden genegeerd, zodat de sync hem niet terugzet."
@@ -94,6 +97,7 @@ export function ApplicationDetailPage() {
             <dt>Aanmelding</dt>
             <dd>
               <AuthLabel method={a.auth_method} />
+              {a.auto_login && <Badge tone="good">automatische login</Badge>}
             </dd>
             <dt>URL</dt>
             <dd>
@@ -161,6 +165,7 @@ export function ApplicationDetailPage() {
           )}
         </Card>
       </div>
+      <AutoLoginCard orgId={orgId} app={a} manage={manage} />
       {manage && (
         <Card title="Geschiedenis">
           {audit.data?.items.length ? <AuditTable items={audit.data.items} /> : <Empty>Geen gebeurtenissen.</Empty>}

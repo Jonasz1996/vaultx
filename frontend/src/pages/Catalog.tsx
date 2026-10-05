@@ -171,6 +171,11 @@ export function CatalogPage() {
                       </td>
                       <td>
                         <AuthLabel method={a.auth_method} />
+                        {a.auto_login && (
+                          <Badge tone="good" title="Automatische login via Authentik ingericht">
+                            auto-login
+                          </Badge>
+                        )}
                       </td>
                       <td className="nowrap">
                         <StatusBadge status={a.status} />

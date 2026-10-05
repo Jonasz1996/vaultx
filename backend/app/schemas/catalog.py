@@ -328,6 +328,9 @@ class ApplicationOut(BaseModel):
     auto_update: bool
     hosts: list[ApplicationHostOut]
     warning_count: int
+    auto_login: Literal["grafana", "oidc"] | None = Field(
+        None, description="Fase 5: sjabloon van de automatische login, null = niet ingericht"
+    )
     created_at: datetime
     updated_at: datetime
 

@@ -42,6 +42,15 @@ class FakeAuthentik:
             "default-provider-invalidation-flow": INVALIDATION_FLOW,
         }
         self.groups: list[dict[str, Any]] = []
+        self.scope_mappings = [
+            {
+                "pk": str(uuid.uuid4()),
+                "managed": f"goauthentik.io/providers/oauth2/scope-{s}",
+                "scope_name": s,
+            }
+            for s in ("openid", "email", "profile", "offline_access", "entitlements")
+        ]
+        self.keypairs = [{"pk": str(uuid.uuid4()), "name": "authentik Self-signed Certificate"}]
         self.providers: dict[int, dict[str, Any]] = {}
         self.applications: dict[str, dict[str, Any]] = {}
         self.bindings: list[dict[str, Any]] = []
@@ -73,6 +82,7 @@ class FakeAuthentik:
         self._next_pk += 1
         p = {
             "pk": pk,
+            "type": "proxy",
             "name": name or f"Provider {pk}",
             "mode": mode,
             "external_host": external_host,
@@ -94,11 +104,29 @@ class FakeAuthentik:
             self.outposts[outpost]["providers"].append(pk)
         return p
 
+    def add_oauth2_provider(self, body: dict[str, Any]) -> dict[str, Any]:
+        pk = self._next_pk
+        self._next_pk += 1
+        p = {
+            **body,
+            "pk": pk,
+            "type": "oauth2",
+            "client_id": f"client-{pk}",
+            "client_secret": body.get("client_secret") or f"secret-{pk}-" + uuid.uuid4().hex,
+            "assigned_application_slug": None,
+            "assigned_application_name": None,
+        }
+        self.providers[pk] = p
+        return p
+
+    def oauth2(self) -> list[dict[str, Any]]:
+        return [p for p in self.providers.values() if p["type"] == "oauth2"]
+
     def serves(self, domain: str) -> bool:
         """Kent een outpost dit domein (provider met applicatie op een outpost)?"""
         on_outposts = {pk for o in self.outposts.values() for pk in o["providers"]}
         for p in self.providers.values():
-            if p["pk"] not in on_outposts or not p["assigned_application_slug"]:
+            if p["type"] != "proxy" or p["pk"] not in on_outposts or not p["assigned_application_slug"]:
                 continue
             if (urlsplit(p["external_host"]).hostname or "") == domain:
                 return True
@@ -155,7 +183,9 @@ class FakeAuthentik:
         if path == "/providers/proxy/" and m == "GET":
             search = q.get("search")
             found = [
-                p for p in self.providers.values() if not search or search in p["name"] + p["external_host"]
+                p
+                for p in self.providers.values()
+                if p["type"] == "proxy" and (not search or search in p["name"] + p["external_host"])
             ]
             return httpx.Response(200, json=_page(found))
         if path == "/providers/proxy/" and m == "POST":
@@ -168,7 +198,7 @@ class FakeAuthentik:
             return httpx.Response(201, json=p)
         if mp := re.fullmatch(r"/providers/proxy/(\d+)/", path):
             pk = int(mp.group(1))
-            if pk not in self.providers or m != "DELETE":
+            if pk not in self.providers or self.providers[pk]["type"] != "proxy" or m != "DELETE":
                 return httpx.Response(404, json={"detail": "No ProxyProvider matches the given query."})
             del self.providers[pk]
             for o in self.outposts.values():
@@ -177,6 +207,37 @@ class FakeAuthentik:
                 if app["provider"] == pk:
                     app["provider"] = None
             return httpx.Response(204)
+        if path == "/providers/oauth2/" and m == "GET":
+            search = q.get("search")
+            return httpx.Response(
+                200, json=_page([p for p in self.oauth2() if not search or search in p["name"]])
+            )
+        if path == "/providers/oauth2/" and m == "POST":
+            body = self._json(request)
+            if any(p["name"] == body["name"] for p in self.providers.values()):
+                return httpx.Response(400, json={"name": ["provider with this name already exists."]})
+            if body.get("authorization_flow") not in self.flows.values():
+                return httpx.Response(400, json={"authorization_flow": ["This field is required."]})
+            mappings = {m["pk"] for m in self.scope_mappings}
+            if any(pk not in mappings for pk in body.get("property_mappings", [])):
+                return httpx.Response(
+                    400, json={"property_mappings": ["Invalid pk - object does not exist."]}
+                )
+            # Zoals Authentik voor een account zonder change_oauth2provider: geen secret in het antwoord.
+            return httpx.Response(201, json={**self.add_oauth2_provider(body), "client_secret": None})
+        if mo2 := re.fullmatch(r"/providers/oauth2/(\d+)/", path):
+            pk = int(mo2.group(1))
+            if pk not in self.providers or self.providers[pk]["type"] != "oauth2" or m != "DELETE":
+                return httpx.Response(404, json={"detail": "No OAuth2Provider matches the given query."})
+            del self.providers[pk]
+            for app in self.applications.values():
+                if app["provider"] == pk:
+                    app["provider"] = None
+            return httpx.Response(204)
+        if path == "/propertymappings/provider/scope/" and m == "GET":
+            return httpx.Response(200, json=_page(self.scope_mappings))
+        if path == "/crypto/certificatekeypairs/" and m == "GET":
+            return httpx.Response(200, json=_page(self.keypairs))
         if path == "/core/applications/" and m == "POST":
             body = self._json(request)
             errors: dict[str, list[str]] = {}

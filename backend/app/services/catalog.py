@@ -7,7 +7,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import NotFoundError
+from app.core.errors import InvalidOperationError, NotFoundError
 from app.models import Application, AppSource, AuthMethod, DiscoveredHost
 from app.repositories import ApplicationRepository, OrganizationRepository
 from app.schemas.catalog import ApplicationCreate, ApplicationUpdate
@@ -32,6 +32,10 @@ def app_status(app: Application) -> str:
     if live and not any(h.enabled and h.nginx_online for h in live):
         return "offline"
     if app.auth_method in AUTHENTIK_METHODS:
+        return "protected"
+    login = app.login
+    if login is not None and login.last_check_status == "ok":
+        # Fase 5: de app meldt zelf aan via Authentik en VaultX zag dat werken.
         return "protected"
     if app.auth_method in RESTRICTED_METHODS:
         return "restricted"
@@ -149,6 +153,9 @@ class CatalogService:
     async def delete(self, p: Principal, org_id: UUID, app_id: UUID) -> None:
         app = await self._app_visible(p, org_id, app_id)
         await self._require_manage(p, "application.delete", org_id, app_id)
+        if app.login is not None:
+            # Anders blijven de provider en applicatie in Authentik achter (en Grafana wijst ernaar).
+            raise InvalidOperationError("Haal eerst de automatische login van deze app weg")
         # Hosts van dit item krijgen "negeren", anders maakt de volgende sync het opnieuw aan.
         ignored = []
         for host in app.hosts:

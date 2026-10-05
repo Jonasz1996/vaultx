@@ -108,3 +108,27 @@ VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
 ```
 
 Vereist Node 22 of nieuwer en een lege database.
+
+# End-to-end test fase 5: automatische login met echte Authentik én Grafana
+
+`autologin_e2e.py` test de automatische login voor Grafana. Het maakt in
+Authentik een serviceaccount met enkel de rechten uit docs/autologin.md,
+groepen en drie gebruikers, start VaultX met dat token en richt via de
+VaultX-API de login in: provider, applicatie en groepsbinding in Authentik, en
+de generic OAuth-login in Grafana via de SSO settings API. Met `--browser`:
+carol meldt zich eerst bij Authentik aan en zit daarna meteen in Grafana (als
+Admin), alice komt via de Authentik-aanmelding binnen (Viewer), eve wordt
+geweigerd. Daarna config opvragen, weghalen (Grafana weer met eigen
+aanmeldformulier) en het generieke OIDC-sjabloon.
+
+Grafana moet Authentik bereiken op `--authentik` (bv. allebei met
+`--network host`), en zijn `root_url` moet `--grafana` zijn.
+
+```bash
+docker run -d --name grafana --network host -e GF_SECURITY_ADMIN_PASSWORD=grafana-admin-pw \
+  -e GF_SERVER_ROOT_URL=http://localhost:3000/ docker.io/grafana/grafana:13.2.3
+cd backend
+VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
+  python ../e2e/autologin_e2e.py --authentik http://localhost:9000 --authentik-token <beheertoken> \
+  --grafana http://localhost:3000 --grafana-password grafana-admin-pw --browser
+```
