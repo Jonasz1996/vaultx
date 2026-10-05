@@ -11,10 +11,9 @@ is aangemeld, komt meteen in de app).
 **Fase 5**
 
 - Per app in de catalogus "Automatische login inrichten": VaultX maakt in Authentik een OIDC-provider, applicatie en groepsbindingen voor de app
-- Grafana: VaultX zet de login met Authentik ook meteen in Grafana (SSO settings API, zonder herstart), met rollen uit de Authentik-groepen, en controleert dat Grafana naar Authentik doorstuurt
-- Andere OIDC-apps (Portainer, Gitea, Proxmox, ...): VaultX toont issuer, client ID en secret om in te vullen
-- Voorbeeld vooraf, terugdraaien bij een fout, weghalen ruimt Authentik en Grafana op; client secret versleuteld, opvragen staat in de auditlog
-- Getest tegen echte Authentik 2026.8.3 en Grafana 13.2.3 in de browser: al aangemeld bij Authentik = meteen in Grafana (ook in CI). Zie [docs/autologin.md](docs/autologin.md)
+- VaultX koppelt enkel met Authentik en NPM, niet met de app zelf: het toont issuer, client ID en secret om in de app in te vullen (elke app die OpenID Connect kent)
+- Voorbeeld vooraf, terugdraaien bij een fout, weghalen ruimt Authentik op; client secret versleuteld, opvragen staat in de auditlog
+- Getest tegen echte Authentik 2026.8.3 in de browser, met een test-app als OIDC-client: al aangemeld bij Authentik = meteen in de app (ook in CI). Zie [docs/autologin.md](docs/autologin.md)
 
 **Fase 4**
 

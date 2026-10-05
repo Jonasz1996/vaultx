@@ -284,19 +284,13 @@ class AppLogin(TimestampMixin, Base):
 
     VaultX maakte in Authentik een OAuth2/OpenID-provider en een applicatie aan,
     zodat de app zelf via Authentik aanmeldt: wie al een Authentik-sessie heeft,
-    komt binnen zonder tweede login. Per object staat of VaultX het zelf
-    aanmaakte; opruimen raakt enkel die objecten aan. Het client secret staat
-    versleuteld (AES-GCM, sleutel afgeleid van VAULTX_SECRET_KEY).
+    komt binnen zonder tweede login. VaultX praat enkel met Authentik; de app
+    zelf krijgt de instellingen van de beheerder. Per object staat of VaultX het
+    zelf aanmaakte; opruimen raakt enkel die objecten aan. Het client secret
+    staat versleuteld (AES-GCM, sleutel afgeleid van VAULTX_SECRET_KEY).
     """
 
     __tablename__ = "app_logins"
-    __table_args__ = (
-        CheckConstraint("template IN ('grafana','oidc')", name="template_valid"),
-        CheckConstraint(
-            "last_check_status IS NULL OR last_check_status IN ('ok','failed','unknown')",
-            name="check_status_valid",
-        ),
-    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -305,15 +299,11 @@ class AppLogin(TimestampMixin, Base):
     application_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("applications.id", ondelete="CASCADE"), unique=True
     )
-    # Sjabloon uit services/login_templates.py: grafana | oidc (eender welke OIDC-app).
-    template: Mapped[str] = mapped_column(String(32))
     app_url: Mapped[str] = mapped_column(String(2048))
     redirect_uris: Mapped[list[str]] = mapped_column(JSONB, default=list)
     # "all" | "organization" | "team:<slug>"; namen van de gebonden groepen.
     access: Mapped[str] = mapped_column(String(80))
     groups: Mapped[list[str]] = mapped_column(JSONB, default=list)
-    # Sjabloonkeuzes, bv. {"default_role": "Viewer"} voor Grafana.
-    options: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     provider_pk: Mapped[int] = mapped_column(Integer)
     provider_name: Mapped[str] = mapped_column(String(255))
     provider_created: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -322,12 +312,6 @@ class AppLogin(TimestampMixin, Base):
     application_created: Mapped[bool] = mapped_column(Boolean, default=False)
     client_id: Mapped[str] = mapped_column(String(255))
     client_secret_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
-    # VaultX zette de instellingen zelf in de app (Grafana: SSO settings API).
-    app_configured: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
-    app_configured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    last_check_status: Mapped[str | None] = mapped_column(String(16))
-    last_check_message: Mapped[str | None] = mapped_column(Text)
     # Opruimen bij weghalen mislukte: wat er nog met de hand weg moet.
     cleanup_error: Mapped[str | None] = mapped_column(Text)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(

@@ -18,7 +18,6 @@ import pytest_asyncio
 
 from tests.fake_authentik import TOKEN as AUTHENTIK_TOKEN
 from tests.fake_authentik import FakeAuthentik
-from tests.fake_grafana import FakeGrafana
 from tests.fake_npm import FakeNPM
 from tests.fake_oidc import FakeOIDCProvider
 
@@ -52,7 +51,6 @@ from app.core.config import get_settings  # noqa: E402
 from app.core.db import get_engine  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.services.authentik_client import AuthentikClient  # noqa: E402
-from app.services.grafana_client import GrafanaClient  # noqa: E402
 from app.services.npm_client import NPMClient  # noqa: E402
 from app.services.oidc import OIDCProvider  # noqa: E402
 
@@ -101,13 +99,8 @@ def fake_authentik() -> FakeAuthentik:
     return FakeAuthentik()
 
 
-@pytest.fixture
-def fake_grafana() -> FakeGrafana:
-    return FakeGrafana()
-
-
 @pytest_asyncio.fixture
-async def app(fake_npm: FakeNPM, fake_authentik: FakeAuthentik, fake_grafana: FakeGrafana):
+async def app(fake_npm: FakeNPM, fake_authentik: FakeAuthentik):
     application = create_app()
     application.state.oidc = OIDCProvider(get_settings())
     application.state.npm_client_factory = lambda conn: NPMClient(
@@ -116,9 +109,6 @@ async def app(fake_npm: FakeNPM, fake_authentik: FakeAuthentik, fake_grafana: Fa
     application.state.npm_prober = fake_npm.probe
     application.state.authentik_client_factory = lambda: AuthentikClient(
         "http://authentik.test", AUTHENTIK_TOKEN, transport=fake_authentik.transport
-    )
-    application.state.grafana_client_factory = lambda url, user, password: GrafanaClient(
-        url, user, password, transport=fake_grafana.transport
     )
     yield application
     await application.state.oidc.aclose()

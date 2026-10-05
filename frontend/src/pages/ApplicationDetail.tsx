@@ -70,7 +70,7 @@ export function ApplicationDetailPage() {
               </button>
               <button
                 className="btn btn-danger"
-                disabled={a.auto_login !== null}
+                disabled={a.auto_login}
                 title={a.auto_login ? "Haal eerst de automatische login weg" : undefined}
                 onClick={() => {
                   const extra = a.hosts.length

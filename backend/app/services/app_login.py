@@ -1,39 +1,30 @@
 """Automatische login voor een app uit de catalogus (fase 5).
 
 Het hoofdscenario uit de opdracht: een gebruiker die al bij Authentik is
-aangemeld, opent https://grafana.example.be en zit meteen in Grafana, zonder
-tweede login. VaultX richt daarvoor methode 4 uit 02b in (de app wordt zelf een
-OpenID Connect-client van Authentik):
+aangemeld, opent een app achter NPM en zit er meteen in, zonder tweede login.
+Methode 4 uit 02b: de app wordt zelf een OpenID Connect-client van Authentik.
+
+VaultX praat daarvoor enkel met Authentik (de app-URL komt uit de catalogus,
+dus uit NPM). Het koppelt niet met de app zelf: de beheerder vult issuer,
+client ID en secret in de app in.
 
 1. Voorbeeld: VaultX leest Authentik (flows, scope mappings, certificaat,
-   groepen) en, als de beheerder een Grafana-beheerder opgeeft, Grafana (welke
-   URL Grafana van zichzelf denkt te hebben, en of er al een OAuth-login staat).
-   Er verandert niets.
-2. Toepassen: in Authentik een OAuth2/OpenID-provider met de redirect URI van
-   de app, een applicatie en groepsbindingen voor de toegang. Bij Grafana met
-   beheerdersaccount zet VaultX de generic OAuth-login ook meteen in Grafana
-   (SSO settings API, werkt zonder herstart). Faalt een stap, dan draait VaultX
-   terug wat het al aanmaakte.
-3. Controle: VaultX opent /login van de app zoals een bezoeker zonder sessie.
-   Grafana hoort dan door te sturen naar Authentik met de juiste client ID en
-   redirect URI.
-
-Het client secret staat versleuteld in app_logins; beheerders kunnen de
-app-config (met secret) opnieuw opvragen, en dat staat in de auditlog. De
-gegevens van de Grafana-beheerder bewaart VaultX niet.
+   groepen, bestaande providers). Er verandert niets.
+2. Toepassen: in Authentik een OAuth2/OpenID-provider met de redirect URI's
+   van de app, een applicatie en groepsbindingen voor de toegang. Faalt een
+   stap, dan draait VaultX terug wat het al aanmaakte.
+3. Config: de instellingen voor de app, met het client secret (staat
+   versleuteld in app_logins; opvragen staat in de auditlog).
 """
 
 from __future__ import annotations
 
-import asyncio
-import logging
 import re
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
@@ -42,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.errors import ConflictError, InvalidOperationError, NotFoundError, UpstreamError
 from app.core.security import open_secret, seal_secret
-from app.models import Application, AppLogin, DiscoveredHost
+from app.models import Application, AppLogin
 from app.repositories import (
     ApplicationRepository,
     AppLoginRepository,
@@ -52,39 +43,17 @@ from app.repositories import (
 from app.services.audit import AuditService
 from app.services.authentik_client import AuthentikClient, AuthentikError
 from app.services.authentik_protect import ACCESS_RE, NAME_ATTEMPTS, access_groups, access_label
-from app.services.grafana_client import GrafanaClient, GrafanaError
-from app.services.login_templates import (
-    GRAFANA_ROLES,
-    SCOPE_MANAGED,
-    TEMPLATES,
-    AuthentikUrls,
-    LoginTemplate,
-    grafana_admin_groups,
-    grafana_api_settings,
-    grafana_env,
-    grafana_ini,
-    grafana_role_path,
-    grafana_values,
-    normalize_app_url,
-    oidc_summary,
-    redirect_uris,
-    templates_for,
-)
-from app.services.npm_probe import REDIRECTS, Prober, ProbeTarget, make_prober
 from app.services.npm_protect import Check
 from app.services.principal import Principal
-
-log = logging.getLogger(__name__)
 
 PROVIDER_PREFIX = "VaultX login: "
 SLUG_PREFIX = "vaultx-login-"
 MAX_SLUG = 50
-# Grafana past nieuwe SSO-instellingen meteen toe; geef het toch even de tijd.
-CHECK_ATTEMPTS = 3
-CHECK_DELAY_SECONDS = 1.0
+# Scopes die de provider meekrijgt (beheerde scope mappings van Authentik).
+SCOPES = ("openid", "email", "profile", "offline_access")
+SCOPE_MANAGED = {s: f"goauthentik.io/providers/oauth2/scope-{s}" for s in SCOPES}
 
 AuthentikFactory = Callable[[], AuthentikClient]
-GrafanaFactory = Callable[[str, str, str], GrafanaClient]
 
 
 def login_slug(domain: str, attempt: int = 0) -> str:
@@ -97,28 +66,96 @@ def login_provider_name(domain: str, attempt: int = 0) -> str:
     return PROVIDER_PREFIX + domain + (f" ({attempt + 1})" if attempt else "")
 
 
-@dataclass(slots=True)
-class GrafanaAdmin:
-    """Beheerder van Grafana voor één actie; wordt niet bewaard."""
+def normalize_app_url(url: str | None) -> str | None:
+    """https://app.example.be/ -> https://app.example.be; None bij een ongeldige URL."""
+    if not url:
+        return None
+    try:
+        parts = urlsplit(url.strip())
+        parts.port  # noqa: B018 - gooit ValueError bij een ongeldige poort
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.query or parts.fragment:
+        return None
+    return f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}"
 
-    url: str
-    username: str
-    password: str
+
+def valid_redirect_uri(uri: str) -> bool:
+    """Een redirect URI moet een absolute http(s)-URL zijn, zonder fragment."""
+    try:
+        parts = urlsplit(uri)
+        parts.port  # noqa: B018
+    except ValueError:
+        return False
+    return (
+        parts.scheme in ("http", "https")
+        and bool(parts.hostname)
+        and not parts.fragment
+        and not any(c.isspace() for c in uri)
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AuthentikUrls:
+    """URL's van Authentik zoals browsers en de app ze gebruiken (publieke URL)."""
+
+    base: str
+    slug: str
+
+    @property
+    def issuer(self) -> str:
+        return f"{self.base}/application/o/{self.slug}/"
+
+    @property
+    def discovery(self) -> str:
+        return f"{self.issuer}.well-known/openid-configuration"
+
+    @property
+    def authorize(self) -> str:
+        return f"{self.base}/application/o/authorize/"
+
+    @property
+    def token(self) -> str:
+        return f"{self.base}/application/o/token/"
+
+    @property
+    def userinfo(self) -> str:
+        return f"{self.base}/application/o/userinfo/"
+
+    @property
+    def end_session(self) -> str:
+        return f"{self.issuer}end-session/"
+
+
+def config_text(urls: AuthentikUrls, client_id: str, client_secret: str, redirects: list[str]) -> str:
+    """De instellingen om in de app in te vullen, als tekst om te kopiëren."""
+    lines = [
+        "# In te vullen in de app (OpenID Connect / OAuth2).",
+        f"Issuer:                  {urls.issuer}",
+        f"Discovery-URL:           {urls.discovery}",
+        f"Client ID:               {client_id}",
+        f"Client secret:           {client_secret}",
+        f"Scopes:                  {' '.join(SCOPES)}",
+        f"Authorization URL:       {urls.authorize}",
+        f"Token URL:               {urls.token}",
+        f"Userinfo URL:            {urls.userinfo}",
+        f"Uitloggen (end session): {urls.end_session}",
+        "Redirect URI('s) die Authentik aanvaardt:",
+        *[f"  {u}" for u in redirects],
+        "Gebruikersnaam-claim: preferred_username; e-mail: email; groepen: groups.",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 @dataclass(slots=True)
 class LoginRequest:
-    template: str
+    redirect_uris: list[str]
     access: str = "organization"
     app_url: str | None = None
-    redirect_uris: list[str] = field(default_factory=list)
-    default_role: str = "Viewer"
-    grafana: GrafanaAdmin | None = None
 
 
 @dataclass(slots=True)
 class LoginPlan:
-    template: str
     app_url: str | None
     redirect_uris: list[str]
     access: str
@@ -130,10 +167,6 @@ class LoginPlan:
     flows: dict[str, str] = field(default_factory=dict)
     mappings: list[str] = field(default_factory=list)
     signing_key: str | None = None
-    options: dict[str, Any] = field(default_factory=dict)
-    role_path: str | None = None
-    configure_app: bool = False
-    grafana_version: str | None = None
 
     @property
     def blocked(self) -> bool:
@@ -149,25 +182,12 @@ class LoginPlan:
         self.checks.append(Check(code, "info", message))
 
 
-@dataclass(slots=True)
-class CheckResult:
-    status: str  # ok | failed | unknown
-    message: str
-    url: str | None = None
-
-
-def _query(location: str) -> dict[str, str]:
-    return {k: v[0] for k, v in parse_qs(urlsplit(location).query).items() if v}
-
-
 class AppLoginService:
     def __init__(
         self,
         db: AsyncSession,
         settings: Settings,
         authentik_factory: AuthentikFactory | None = None,
-        grafana_factory: GrafanaFactory | None = None,
-        prober: Prober | None = None,
     ) -> None:
         self.db = db
         self.settings = settings
@@ -176,8 +196,6 @@ class AppLoginService:
         self.orgs = OrganizationRepository(db)
         self.audit = AuditService(db)
         self.authentik_factory = authentik_factory or self._default_authentik
-        self.grafana_factory = grafana_factory or self._default_grafana
-        self.prober = prober or make_prober(settings.npm_http_timeout_seconds)
 
     def _default_authentik(self) -> AuthentikClient:
         token = self.settings.authentik_api_token
@@ -188,13 +206,11 @@ class AppLoginService:
             timeout=self.settings.authentik_http_timeout_seconds,
         )
 
-    def _default_grafana(self, url: str, username: str, password: str) -> GrafanaClient:
-        # Grafana staat meestal in het eigen netwerk met een eigen certificaat; VaultX stuurt enkel
-        # het beheerderswachtwoord mee naar de URL die de beheerder zelf opgaf.
-        return GrafanaClient(url, username, password, verify_tls=False)
-
     def _secret_context(self, login_id: UUID) -> str:
         return f"app-login:{login_id}"
+
+    def _urls(self, slug: str) -> AuthentikUrls:
+        return AuthentikUrls(self.settings.authentik_public_base, slug)
 
     # ------------------------------------------------------------ laden en rechten
 
@@ -220,17 +236,11 @@ class AppLoginService:
 
     async def get(self, p: Principal, org_id: UUID, app_id: UUID) -> dict[str, Any]:
         app = await self._app(p, org_id, app_id)
-        login = await self.logins.for_application(app.id)
-        host = _live_host(app)
         return {
             "configured": self.settings.authentik_api_enabled,
             "authentik_url": self.settings.authentik_public_base,
-            "templates": [_template_out(t) for t in templates_for(app.app_type)],
             "suggested_app_url": normalize_app_url(app.url),
-            "suggested_grafana_url": (
-                f"{host.forward_scheme}://{host.forward_host}:{host.forward_port}" if host else None
-            ),
-            "login": login,
+            "login": await self.logins.for_application(app.id),
         }
 
     # ------------------------------------------------------------ voorbeeld
@@ -243,13 +253,10 @@ class AppLoginService:
     async def _plan(
         self, client: AuthentikClient, app: Application, req: LoginRequest, ctx: dict[str, Any]
     ) -> LoginPlan:
-        template: LoginTemplate | None = TEMPLATES.get(req.template)
         app_url = normalize_app_url(req.app_url or app.url)
-        plan = LoginPlan(template=req.template, app_url=app_url, redirect_uris=[], access=req.access)
+        redirects = list(dict.fromkeys(u.strip() for u in req.redirect_uris if u.strip()))
+        plan = LoginPlan(app_url=app_url, redirect_uris=redirects, access=req.access)
         plan.app_name = app.name
-        if template is None:
-            plan.block("login_template", "Onbekend sjabloon.")
-            return plan
         if not ACCESS_RE.fullmatch(req.access):
             plan.block("ak_access_invalid", "Ongeldige keuze voor de toegang.")
             return plan
@@ -260,37 +267,19 @@ class AppLoginService:
                 "app openen.",
             )
             return plan
-        if template.app_types and app.app_type not in template.app_types:
-            plan.warn(
-                "login_app_type",
-                f"Deze app staat in de catalogus niet als {template.label} "
-                f"({app.app_type or 'type onbekend'}).",
-            )
-        plan.redirect_uris = redirect_uris(template, app_url, req.redirect_uris)
-        for uri in plan.redirect_uris:
-            if normalize_app_url(uri) is None:
-                plan.block("login_redirect_invalid", f"Ongeldige redirect URI: {uri}")
-        if not plan.redirect_uris:
+        if not redirects:
             plan.block("login_redirect_missing", "Geef minstens één redirect URI van de app op.")
-        if app_url.startswith("http://"):
-            plan.warn(
-                "login_http",
-                "De app draait over http. De aanmelding werkt, maar codes en tokens gaan dan "
-                "onversleuteld over het netwerk; zet HTTPS aan in NPM.",
-            )
-        if req.template == "grafana":
-            if req.default_role not in GRAFANA_ROLES:
-                plan.block("login_role", "Kies Viewer, Editor of Admin als standaardrol.")
-                return plan
-            admins = grafana_admin_groups(
-                self.settings.oidc_group_prefix, ctx["org_slug"], self.settings.oidc_admin_groups
-            )
-            plan.options = {"default_role": req.default_role, "admin_groups": admins}
-            plan.role_path = grafana_role_path(admins, req.default_role)
-            plan.info(
-                "login_roles",
-                f"Rollen in Grafana: Admin voor {', '.join(admins)}; {req.default_role} voor de anderen.",
-            )
+        for uri in redirects:
+            if not valid_redirect_uri(uri):
+                plan.block("login_redirect_invalid", f"Ongeldige redirect URI: {uri}")
+            elif uri.startswith("http://"):
+                plan.warn(
+                    "login_http",
+                    f"Redirect URI {uri} gaat over http: codes en tokens gaan dan onversleuteld over het "
+                    "netwerk. Zet HTTPS aan in NPM.",
+                )
+        if plan.blocked:
+            return plan
 
         # Authentik: flows, scope mappings, certificaat, groepen.
         for key, slug in (
@@ -359,7 +348,7 @@ class AppLoginService:
         plan.provider_name = login_provider_name(domain, attempt)
         plan.steps.append(
             f"Authentik: OAuth2/OpenID-provider '{plan.provider_name}' aanmaken (redirect URI "
-            f"{', '.join(plan.redirect_uris)}, scopes openid, email, profile, offline_access)."
+            f"{', '.join(plan.redirect_uris)}, scopes {', '.join(SCOPES)})."
         )
         plan.steps.append(f"Authentik: applicatie '{app.name}' ({login_slug(domain)}) aanmaken.")
         if plan.groups:
@@ -368,52 +357,11 @@ class AppLoginService:
             )
         else:
             plan.steps.append("Authentik: aanmelden voor alle Authentik-gebruikers (geen groepsbinding).")
-        return plan
-
-    async def _plan_grafana(self, plan: LoginPlan, admin: GrafanaAdmin) -> None:
-        """Leest Grafana met het opgegeven beheerdersaccount; wijzigt niets."""
-        url = normalize_app_url(admin.url)
-        if url is None:
-            plan.block("grafana_url", "Ongeldig adres voor de Grafana-API.")
-            return
-        try:
-            async with self.grafana_factory(url, admin.username, admin.password) as g:
-                front = await g.frontend_settings()
-                current = await g.sso_settings()
-        except GrafanaError as exc:
-            plan.block("grafana_api", f"Grafana: {exc.message}")
-            return
-        plan.grafana_version = str((front.get("buildInfo") or {}).get("version") or "") or None
-        root = normalize_app_url(str(front.get("appUrl") or ""))
-        if root != plan.app_url:
-            plan.block(
-                "grafana_root_url",
-                f"Grafana denkt dat het op {front.get('appUrl') or '(leeg)'} staat, niet op {plan.app_url}/. "
-                "Dan stuurt Grafana Authentik een verkeerde redirect URI. Zet in Grafana "
-                f"GF_SERVER_ROOT_URL={plan.app_url}/ (of root_url in grafana.ini), herstart Grafana en "
-                "probeer opnieuw.",
-            )
-        settings = current.get("settings") or {}
-        if settings.get("enabled"):
-            plan.block(
-                "grafana_oauth_exists",
-                f"Grafana heeft al een generic OAuth-login (client '{settings.get('clientId')}', "
-                f"{settings.get('authUrl') or 'geen URL'}). VaultX overschrijft die niet; zet ze eerst "
-                "uit in Grafana (Administration > Authentication).",
-            )
-        if plan.blocked:
-            return
-        plan.configure_app = True
-        label = f"Grafana {plan.grafana_version}" if plan.grafana_version else "Grafana"
         plan.steps.append(
-            f"{label}: generic OAuth-login met Authentik aanzetten, met automatisch doorsturen naar "
-            "Authentik (via de API, zonder herstart)."
+            "Daarna toont VaultX issuer, client ID en secret om in de app in te vullen. VaultX wijzigt niets "
+            "in de app zelf."
         )
-        plan.info(
-            "grafana_break_glass",
-            "Lokaal aanmelden in Grafana blijft mogelijk via /login?disableAutoLogin, bv. met het "
-            "admin-account als Authentik onbeschikbaar is.",
-        )
+        return plan
 
     async def preview(self, p: Principal, org_id: UUID, app_id: UUID, req: LoginRequest) -> LoginPlan:
         app = await self._manage(p, org_id, app_id, "configure")
@@ -429,13 +377,6 @@ class AppLoginService:
         if existing is not None:
             plan.block(
                 "login_exists", "Automatische login staat al ingericht. Haal ze eerst weg om ze te wijzigen."
-            )
-        if req.grafana is not None and req.template == "grafana" and not plan.blocked:
-            await self._plan_grafana(plan, req.grafana)
-        elif req.template == "grafana":
-            plan.steps.append(
-                "Grafana: de instellingen zelf invullen (grafana.ini of omgevingsvariabelen) en Grafana "
-                "herstarten. Of geef een Grafana-beheerder op, dan zet VaultX ze meteen."
             )
         return plan
 
@@ -466,13 +407,9 @@ class AppLoginService:
                     state.update(slug=created["slug"], app_created=True, app_name=created.get("name"))
                     for order, group in enumerate(plan.groups):
                         await client.create_binding(str(created["pk"]), str(group["pk"]), order)
-                    if plan.configure_app:
-                        assert req.grafana is not None
-                        await self._configure_grafana(req.grafana, plan, provider, state["slug"])
-                except (AuthentikError, GrafanaError) as exc:
+                except AuthentikError as exc:
                     errors = await self._undo(client, state)
-                    where = "Grafana" if isinstance(exc, GrafanaError) else "Authentik"
-                    message = f"{where}: {exc.message}"
+                    message = f"Authentik: {exc.message}"
                     if errors:
                         message += " Terugdraaien in Authentik lukte niet volledig: " + "; ".join(errors)
                     else:
@@ -484,23 +421,20 @@ class AppLoginService:
                         organization_id=org_id,
                         target_type="application",
                         target_id=app.id,
-                        details={"template": req.template, "error": message[:500]},
+                        details={"app_url": plan.app_url, "error": message[:500]},
                     )
                     await self.db.commit()
                     raise UpstreamError(message) from exc
         except AuthentikError as exc:  # factory of contextmanager
             raise UpstreamError(f"Authentik: {exc.message}") from exc
 
-        now = datetime.now(UTC)
         login = AppLogin(
             organization_id=org_id,
             application_id=app.id,
-            template=req.template,
             app_url=plan.app_url,
             redirect_uris=plan.redirect_uris,
             access=req.access,
             groups=[g["name"] for g in plan.groups],
-            options=plan.options,
             provider_pk=state["provider_pk"],
             provider_name=state.get("provider_name") or plan.provider_name,
             provider_created=True,
@@ -509,8 +443,6 @@ class AppLoginService:
             application_created=True,
             client_id=str(provider["client_id"]),
             client_secret_ciphertext=b"",
-            app_configured=plan.configure_app,
-            app_configured_at=now if plan.configure_app else None,
             created_by_user_id=p.user.id,
         )
         self.logins.add(login)
@@ -534,20 +466,16 @@ class AppLoginService:
             target_type="application",
             target_id=app.id,
             details={
-                "template": req.template,
                 "app_url": plan.app_url,
+                "redirect_uris": plan.redirect_uris,
                 "provider": login.provider_name,
                 "application": login.application_slug,
                 "client_id": login.client_id,
                 "access": req.access,
                 "groups": login.groups,
-                "app_configured": plan.configure_app,
             },
         )
         await self.db.commit()
-        if login.template == "grafana":
-            await self._run_check(login, app)
-            await self.db.commit()
         await self.db.refresh(login)
         return login
 
@@ -606,32 +534,6 @@ class AppLoginService:
                 raise
         raise AuthentikError("Geen vrije applicatie-slug gevonden")  # pragma: no cover
 
-    def _urls(self, slug: str) -> AuthentikUrls:
-        return AuthentikUrls(self.settings.authentik_public_base, slug)
-
-    def _grafana_values(self, login_or_plan: Any, client_id: str, secret: str, slug: str) -> dict[str, Any]:
-        options = login_or_plan.options or {}
-        role_path = grafana_role_path(
-            options.get("admin_groups") or [], options.get("default_role") or "Viewer"
-        )
-        return grafana_values(self._urls(slug), client_id, secret, role_path)
-
-    async def _configure_grafana(
-        self, admin: GrafanaAdmin, plan: LoginPlan, provider: dict[str, Any], slug: str
-    ) -> None:
-        values = self._grafana_values(
-            plan, str(provider["client_id"]), str(provider.get("client_secret")), slug
-        )
-        url = normalize_app_url(admin.url)
-        assert url is not None
-        async with self.grafana_factory(url, admin.username, admin.password) as g:
-            await g.put_sso_settings(grafana_api_settings(values))
-            back = (await g.sso_settings()).get("settings") or {}
-        if not back.get("enabled") or back.get("clientId") != provider["client_id"]:
-            raise GrafanaError(
-                "Grafana nam de instellingen niet over (na het opslaan staat de login niet aan)."
-            )
-
     async def _undo(self, client: AuthentikClient, state: dict[str, Any]) -> list[str]:
         """Haalt de applicatie (met bindingen) en de provider weg die VaultX aanmaakte."""
         errors: list[str] = []
@@ -655,128 +557,6 @@ class AppLoginService:
                     errors.append(exc.message)
         return errors
 
-    # ------------------------------------------------------------ controleren
-
-    def _targets(self, app: Application, url: str) -> ProbeTarget | None:
-        parts = urlsplit(url)
-        scheme, domain = parts.scheme, (parts.hostname or "")
-        if not domain:
-            return None
-        host = _live_host(app, domain)
-        if host is not None and host.connection is not None:
-            conn = host.connection
-            address = conn.probe_host or urlsplit(conn.base_url).hostname or domain
-            port = conn.probe_https_port if scheme == "https" else conn.probe_http_port
-        else:
-            address = domain
-            port = parts.port or (443 if scheme == "https" else 80)
-        return ProbeTarget(scheme=scheme, address=address, port=port, domain=domain, path=parts.path or "/")
-
-    async def _probe(self, base: ProbeTarget, path: str) -> Any:
-        return await self.prober(
-            ProbeTarget(
-                scheme=base.scheme, address=base.address, port=base.port, domain=base.domain, path=path
-            )
-        )
-
-    async def _grafana_check(self, login: AppLogin, app: Application) -> CheckResult:
-        base = self._targets(app, login.app_url)
-        if base is None:
-            return CheckResult("failed", "De app-URL heeft geen host.")
-        prefix = base.path.rstrip("/")
-        first = await self._probe(base, f"{prefix}/login")
-        url = first.url
-        if first.error:
-            return CheckResult("unknown", f"VaultX bereikt {login.app_url} niet ({first.error}).", url)
-        location = first.location or ""
-        if first.status in REDIRECTS and "/outpost.goauthentik.io/" in location:
-            return CheckResult(
-                "unknown",
-                "De host staat achter Authentik forward auth, dus VaultX komt zonder sessie niet tot bij "
-                "Grafana. Open de app in je browser om te testen.",
-                url,
-            )
-        if first.status == 200:
-            return CheckResult(
-                "failed",
-                "Grafana toont nog zijn eigen aanmeldformulier: de instellingen zijn nog niet actief. Zet "
-                "ze in grafana.ini of als omgevingsvariabelen en herstart Grafana.",
-                url,
-            )
-        if first.status not in REDIRECTS or "/login/generic_oauth" not in location:
-            return CheckResult(
-                "failed", f"Verwacht: doorsturen naar /login/generic_oauth. Gekregen: {first.summary()}.", url
-            )
-        nxt = urlsplit(urljoin(f"{base.scheme}://{base.domain}{prefix}/login", location))
-        second = await self._probe(base, nxt.path + (f"?{nxt.query}" if nxt.query else ""))
-        if second.error:
-            return CheckResult(
-                "unknown", f"VaultX bereikt {login.app_url} niet ({second.error}).", second.url
-            )
-        target = second.location or ""
-        authorize = self._urls(login.application_slug or "").authorize
-        if second.status not in REDIRECTS or not target.startswith(authorize):
-            return CheckResult(
-                "failed",
-                f"Verwacht: doorsturen naar Authentik ({authorize}). Gekregen: {second.summary()}.",
-                second.url,
-            )
-        q = _query(target)
-        if q.get("client_id") != login.client_id:
-            return CheckResult(
-                "failed",
-                f"Grafana stuurt naar Authentik met client '{q.get('client_id')}', niet met die van VaultX "
-                f"('{login.client_id}').",
-                second.url,
-            )
-        if q.get("redirect_uri") not in login.redirect_uris:
-            return CheckResult(
-                "failed",
-                f"Grafana vraagt redirect URI {q.get('redirect_uri')}, Authentik aanvaardt enkel "
-                f"{', '.join(login.redirect_uris)}. Zet GF_SERVER_ROOT_URL={login.app_url}/ in Grafana.",
-                second.url,
-            )
-        return CheckResult(
-            "ok",
-            "Grafana stuurt bezoekers zonder sessie door naar Authentik, met de juiste client en redirect "
-            "URI. Wie al bij Authentik is aangemeld, komt meteen binnen.",
-            second.url,
-        )
-
-    async def _run_check(self, login: AppLogin, app: Application) -> CheckResult:
-        result = CheckResult(
-            "unknown", "Geen controle voor dit sjabloon: meld je aan in de app om te testen."
-        )
-        if login.template == "grafana":
-            for attempt in range(CHECK_ATTEMPTS):
-                result = await self._grafana_check(login, app)
-                if result.status != "failed" or not login.app_configured or attempt == CHECK_ATTEMPTS - 1:
-                    break
-                await asyncio.sleep(CHECK_DELAY_SECONDS)
-        login.last_check_at = datetime.now(UTC)
-        login.last_check_status = result.status
-        login.last_check_message = result.message
-        return result
-
-    async def check(self, p: Principal, org_id: UUID, app_id: UUID) -> AppLogin:
-        app = await self._manage(p, org_id, app_id, "check")
-        login = await self.logins.for_application(app.id)
-        if login is None:
-            raise NotFoundError("Geen automatische login ingericht voor deze app")
-        result = await self._run_check(login, app)
-        await self.audit.record(
-            "app_login.check",
-            p.actor,
-            outcome="success" if result.status != "failed" else "failure",
-            organization_id=org_id,
-            target_type="application",
-            target_id=app.id,
-            details={"status": result.status, "message": result.message, "url": result.url},
-        )
-        await self.db.commit()
-        await self.db.refresh(login)
-        return login
-
     # ------------------------------------------------------------ config opvragen
 
     async def config(self, p: Principal, org_id: UUID, app_id: UUID) -> dict[str, Any]:
@@ -796,28 +576,19 @@ class AppLoginService:
                 "login weg en richt ze opnieuw in."
             ) from exc
         urls = self._urls(login.application_slug or "")
-        out: dict[str, Any] = {
-            "template": login.template,
+        out = {
             "client_id": login.client_id,
             "client_secret": secret,
             "issuer": urls.issuer,
             "discovery_url": urls.discovery,
+            "authorization_url": urls.authorize,
+            "token_url": urls.token,
+            "userinfo_url": urls.userinfo,
+            "end_session_url": urls.end_session,
+            "scopes": list(SCOPES),
             "redirect_uris": login.redirect_uris,
-            "files": [],
+            "text": config_text(urls, login.client_id, secret, login.redirect_uris),
         }
-        if login.template == "grafana":
-            values = self._grafana_values(login, login.client_id, secret, login.application_slug or "")
-            out["files"] = [
-                {"name": "grafana.ini", "content": grafana_ini(login.app_url, values)},
-                {"name": "grafana.env", "content": grafana_env(login.app_url, values)},
-            ]
-        else:
-            out["files"] = [
-                {
-                    "name": "oidc.txt",
-                    "content": oidc_summary(urls, login.client_id, secret, login.redirect_uris),
-                }
-            ]
         await self.audit.record(
             "app_login.config_viewed",
             p.actor,
@@ -831,10 +602,8 @@ class AppLoginService:
 
     # ------------------------------------------------------------ weghalen
 
-    async def remove(
-        self, p: Principal, org_id: UUID, app_id: UUID, grafana: GrafanaAdmin | None, force: bool = False
-    ) -> AppLogin | None:
-        """Zet Grafana terug (als VaultX de login daar zette) en ruimt Authentik op.
+    async def remove(self, p: Principal, org_id: UUID, app_id: UUID) -> AppLogin | None:
+        """Ruimt de provider en applicatie in Authentik op.
 
         Geeft None als alles weg is, anders de rij met cleanup_error.
         """
@@ -842,30 +611,7 @@ class AppLoginService:
         login = await self.logins.for_application(app.id)
         if login is None:
             raise NotFoundError("Geen automatische login ingericht voor deze app")
-        details: dict[str, Any] = {"template": login.template, "client_id": login.client_id}
-        if login.app_configured:
-            if grafana is not None:
-                url = normalize_app_url(grafana.url)
-                if url is None:
-                    raise InvalidOperationError("Ongeldig adres voor de Grafana-API")
-                try:
-                    async with self.grafana_factory(url, grafana.username, grafana.password) as g:
-                        current = (await g.sso_settings()).get("settings") or {}
-                        if current.get("clientId") == login.client_id:
-                            await g.reset_sso_settings()
-                            details["grafana_reset"] = True
-                        else:
-                            details["grafana_reset"] = False
-                except GrafanaError as exc:
-                    raise UpstreamError(f"Grafana: {exc.message} Er werd niets weggehaald.") from exc
-            elif not force:
-                raise InvalidOperationError(
-                    "VaultX zette de login ook in Grafana. Geef een Grafana-beheerder op, zodat VaultX die "
-                    "weer uitzet; anders stuurt Grafana iedereen naar een Authentik-provider die niet meer "
-                    "bestaat en kan niemand nog aanmelden (behalve via /login?disableAutoLogin)."
-                )
-            else:
-                details["grafana_reset"] = False
+        details: dict[str, Any] = {"client_id": login.client_id}
         state = {
             "provider_pk": login.provider_pk,
             "provider_created": login.provider_created,
@@ -880,7 +626,6 @@ class AppLoginService:
         if errors:
             login.provider_created = state["provider_created"]
             login.application_created = state["app_created"]
-            login.app_configured = login.app_configured and not details.get("grafana_reset")
             login.cleanup_error = "; ".join(errors)[:2000]
             await self.audit.record(
                 "app_login.remove",
@@ -905,20 +650,3 @@ class AppLoginService:
         )
         await self.db.commit()
         return None
-
-
-def _live_host(app: Application, domain: str | None = None) -> DiscoveredHost | None:
-    hosts = [h for h in app.hosts if h.removed_at is None]
-    if domain:
-        hosts = [h for h in hosts if domain.lower() in (d.lower() for d in h.domain_names)]
-    return hosts[0] if hosts else None
-
-
-def _template_out(t: LoginTemplate) -> dict[str, Any]:
-    return {
-        "key": t.key,
-        "label": t.label,
-        "description": t.description,
-        "redirect_path": t.redirect_path,
-        "can_configure_app": t.can_configure_app,
-    }

@@ -1,4 +1,9 @@
-"""End-to-end test fase 5: automatische login voor Grafana, met echte Authentik én echte Grafana.
+"""End-to-end test fase 5: automatische login via Authentik, met echte Authentik.
+
+VaultX koppelt enkel met Authentik (en NPM); de app zelf vult de beheerder in.
+Deze test speelt die app zelf: een kleine OIDC-client ("testapp") die, net als
+een app met automatisch doorsturen, een bezoeker zonder sessie meteen naar
+Authentik stuurt en de code met client ID en secret inwisselt.
 
 Wat het doet:
 
@@ -7,38 +12,46 @@ Wat het doet:
    API-token daarvoor, de groepen ``vaultx:<org>`` en ``vaultx:<org>:admin``, en
    gebruikers alice (lid), carol (beheerder van de organisatie) en eve (geen lid).
 2. De VaultX-backend start met het token van het serviceaccount. Via de API:
-   - een app "Grafana" in de catalogus met de URL van Grafana;
-   - voorbeeld en inrichten mét Grafana-beheerder: VaultX maakt in Authentik een
-     OAuth2/OpenID-provider, applicatie en groepsbinding, zet de generic
-     OAuth-login in Grafana (SSO settings API, zonder herstart) en controleert
-     dat Grafana een bezoeker zonder sessie naar Authentik stuurt;
-   - met --browser: carol meldt zich eerst bij Authentik aan en opent dan
-     Grafana: ze zit er meteen in, als Admin, zonder tweede login (het
-     hoofdscenario). alice komt via de Authentik-aanmelding binnen als Viewer,
-     eve wordt door Authentik geweigerd;
-   - de config met client secret opvragen;
-   - weghalen: Grafana toont weer zijn eigen aanmeldformulier en de
-     Authentik-objecten zijn weg;
-   - het generieke OIDC-sjabloon met een eigen redirect URI.
+   - een app "Testapp" in de catalogus;
+   - voorbeeld en inrichten: VaultX maakt in Authentik een OAuth2/OpenID-provider,
+     applicatie en groepsbinding;
+   - de instellingen met client secret opvragen en in de testapp zetten (wat de
+     beheerder met de hand in de app doet);
+   - met --browser: carol meldt zich eerst bij Authentik aan en opent dan de
+     testapp: ze zit er meteen in, zonder tweede login (het hoofdscenario).
+     alice komt via de Authentik-aanmelding binnen, eve wordt door Authentik
+     geweigerd. De testapp controleert het ID-token (handtekening, issuer,
+     audience) en krijgt een refresh token;
+   - weghalen: de provider en applicatie in Authentik zijn weg.
 
     cd backend && python ../e2e/autologin_e2e.py --authentik http://localhost:9000 \\
-        --authentik-token <beheertoken> --grafana http://localhost:3000 \\
-        --grafana-password <wachtwoord> --browser
+        --authentik-token <beheertoken> --browser
 
-Grafana moet Authentik bereiken op --authentik (token- en userinfo-URL) en zijn
-root_url moet --grafana zijn. Zie e2e/README.md.
+Zie e2e/README.md.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import contextlib
+import hashlib
+import html
+import json
 import os
+import secrets
 import subprocess
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
+from joserfc import jwt
+from joserfc.jwk import KeySet
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
@@ -64,16 +77,130 @@ LOGIN_PERMISSIONS = [
 authentik_npm_e2e.PERMISSIONS = [*authentik_npm_e2e.PERMISSIONS, *LOGIN_PERMISSIONS]
 
 
-def grafana_client(url: str, password: str) -> httpx.Client:
-    return httpx.Client(
-        base_url=f"{url.rstrip('/')}/api", auth=("admin", password), timeout=30, trust_env=False
-    )
+class TestApp:
+    """Een app die via OpenID Connect bij Authentik aanmeldt, met automatisch doorsturen.
 
+    Krijgt de instellingen uit "Instellingen tonen" van VaultX (``configure``), net zoals een
+    beheerder ze in een echte app invult. Elke geslaagde aanmelding komt in ``logins``.
+    """
 
-def grafana_login_status(url: str) -> tuple[int, str]:
-    with httpx.Client(trust_env=False, follow_redirects=False, timeout=10) as c:
-        r = c.get(f"{url.rstrip('/')}/login")
-    return r.status_code, r.headers.get("location", "")
+    def __init__(self) -> None:
+        self.port = free_port()
+        self.url = f"http://localhost:{self.port}"
+        self.redirect_uri = f"{self.url}/callback"
+        self.cfg: dict[str, Any] = {}
+        self.pending: dict[str, str] = {}  # state -> PKCE verifier
+        self.sessions: dict[str, dict[str, Any]] = {}
+        self.logins: list[dict[str, Any]] = []
+        self.errors: list[str] = []
+        self.server = ThreadingHTTPServer(("127.0.0.1", self.port), self._handler())
+
+    def configure(self, cfg: dict[str, Any]) -> None:
+        with httpx.Client(trust_env=False, timeout=15) as c:
+            disco = c.get(cfg["discovery_url"]).raise_for_status().json()
+            jwks = c.get(disco["jwks_uri"]).raise_for_status().json()
+        self.cfg = {**cfg, "discovery": disco, "keys": KeySet.import_key_set(jwks)}
+
+    def start(self) -> None:
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def stop(self) -> None:
+        self.server.shutdown()
+
+    def _authorize_url(self) -> str:
+        state = secrets.token_urlsafe(16)
+        verifier = secrets.token_urlsafe(48)
+        self.pending[state] = verifier
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        query = {
+            "response_type": "code",
+            "client_id": self.cfg["client_id"],
+            "redirect_uri": self.redirect_uri,
+            "scope": " ".join(self.cfg["scopes"]),
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+        return f"{self.cfg['authorization_url']}?{urlencode(query)}"
+
+    def _exchange(self, code: str, state: str) -> dict[str, Any]:
+        verifier = self.pending.pop(state)
+        with httpx.Client(trust_env=False, timeout=15) as c:
+            r = c.post(
+                self.cfg["token_url"],
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": self.redirect_uri,
+                    "code_verifier": verifier,
+                },
+                auth=(self.cfg["client_id"], self.cfg["client_secret"]),
+            )
+        if r.status_code != 200:
+            raise RuntimeError(f"token: {r.status_code} {r.text[:300]}")
+        tokens = r.json()
+        token = jwt.decode(tokens["id_token"], self.cfg["keys"])
+        claims = token.claims
+        jwt.JWTClaimsRegistry(
+            iss={"essential": True, "value": self.cfg["issuer"]},
+            aud={"essential": True, "value": self.cfg["client_id"]},
+        ).validate(claims)
+        return {
+            "username": claims.get("preferred_username"),
+            "email": claims.get("email"),
+            "groups": claims.get("groups") or [],
+            "alg": token.header.get("alg"),
+            "refresh_token": bool(tokens.get("refresh_token")),
+        }
+
+    def _handler(self) -> type[BaseHTTPRequestHandler]:
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args: Any) -> None:  # stil
+                pass
+
+            def _send(self, status: int, body: str = "", headers: dict[str, str] | None = None) -> None:
+                self.send_response(status)
+                for k, v in (headers or {}).items():
+                    self.send_header(k, v)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(body.encode())
+
+            def do_GET(self) -> None:  # noqa: N802
+                parts = urlsplit(self.path)
+                cookie = dict(
+                    c.strip().split("=", 1) for c in (self.headers.get("Cookie") or "").split(";") if "=" in c
+                )
+                if parts.path == "/callback":
+                    q = {k: v[0] for k, v in parse_qs(parts.query).items()}
+                    if "error" in q or q.get("state") not in outer.pending:
+                        outer.errors.append(json.dumps(q))
+                        return self._send(400, f"<h1>Aanmelding mislukt</h1><pre>{html.escape(str(q))}</pre>")
+                    try:
+                        user = outer._exchange(q["code"], q["state"])
+                    except Exception as exc:  # noqa: BLE001 - komt in de test terecht
+                        outer.errors.append(str(exc))
+                        return self._send(500, f"<h1>Fout</h1><pre>{html.escape(str(exc))}</pre>")
+                    sid = secrets.token_urlsafe(16)
+                    outer.sessions[sid] = user
+                    outer.logins.append(user)
+                    return self._send(302, headers={"Location": "/", "Set-Cookie": f"testapp={sid}; Path=/"})
+                user = outer.sessions.get(cookie.get("testapp", ""))
+                if user is None:
+                    # Zoals een app met automatisch doorsturen: geen eigen aanmeldformulier.
+                    return self._send(302, headers={"Location": outer._authorize_url()})
+                groups = "".join(f"<li>{html.escape(g)}</li>" for g in user["groups"])
+                self._send(
+                    200,
+                    "<!doctype html><title>Testapp</title><body style='font-family:sans-serif;margin:3em'>"
+                    f"<h1 id=who>Aangemeld als {html.escape(user['username'])}</h1>"
+                    f"<p>Via Authentik (OpenID Connect), e-mail {html.escape(user['email'] or '')}, "
+                    f"ID-token {html.escape(user['alg'] or '')}.</p><p>Groepen:</p><ul>{groups}</ul></body>",
+                )
+
+        return Handler
 
 
 def authentik_login(page, user: str) -> None:
@@ -87,69 +214,79 @@ def authentik_login(page, user: str) -> None:
     page.get_by_role("button", name="Continue").click()
 
 
-def grafana_user(page, grafana: str) -> dict:
-    return page.evaluate(
-        """async (base) => {
-            const u = await (await fetch(base + "/api/user")).json();
-            const orgs = await (await fetch(base + "/api/user/orgs")).json();
-            return {login: u.login, email: u.email, role: orgs[0] && orgs[0].role};
-        }""",
-        grafana.rstrip("/"),
-    )
+def watch_stages(page) -> list[str]:
+    """Welke stappen Authentik in deze pagina toont; een aanmelding is ak-stage-identification."""
+    stages: list[str] = []
+
+    def on_response(response) -> None:
+        if "/api/v3/flows/executor/" in response.url:
+            with contextlib.suppress(Exception):  # geen JSON
+                stages.append(response.json().get("component", "?"))
+
+    page.on("response", on_response)
+    return stages
 
 
-def browser_check(authentik: str, grafana: str, shots: Path | None) -> None:
+def browser_check(authentik: str, app: TestApp, slug: str, shots: Path | None) -> None:
     from playwright.sync_api import sync_playwright
 
     def shot(page, name: str) -> None:
         if shots:
             page.screenshot(path=str(shots / f"{name}.png"))
 
+    def logged_in(page, user: str) -> None:
+        try:
+            page.wait_for_url(f"{app.url}/", timeout=60000)
+            page.wait_for_selector("#who", timeout=30000)
+        except Exception:
+            print("    niet in de testapp:", page.url, app.errors)
+            shot(page, "fout")
+            raise
+        assert page.inner_text("#who") == f"Aangemeld als {user}", page.inner_text("#who")
+
     with sync_playwright() as p:
         browser = p.chromium.launch()
 
-        # Hoofdscenario: carol is al bij Authentik aangemeld en opent dan Grafana.
+        # Hoofdscenario: carol is al bij Authentik aangemeld en opent dan de app.
         page = browser.new_context(locale="en-US").new_page()
         page.goto(f"{authentik}/if/user/")
         authentik_login(page, "carol-login-e2e")
         page.wait_for_url(f"{authentik}/if/user/**", timeout=60000)
         print("    carol: aangemeld bij Authentik")
+        stages = watch_stages(page)
         started = time.monotonic()
-        page.goto(f"{grafana}/")
-        try:
-            page.wait_for_url(f"{grafana}/**", timeout=60000)
-            page.wait_for_function("() => !location.pathname.startsWith('/login')", timeout=60000)
-        except Exception:
-            print("    niet in Grafana:", page.url)
-            shot(page, "fout")
-            raise
-        assert page.locator("input[name=uidField]").count() == 0
-        me = grafana_user(page, grafana)
+        page.goto(f"{app.url}/")
+        logged_in(page, "carol-login-e2e")
         took = time.monotonic() - started
-        assert me["login"] == "carol-login-e2e" and me["role"] == "Admin", me
-        page.wait_for_timeout(1500)
-        shot(page, "carol-grafana")
-        print(f"    carol: meteen in Grafana ({took:.1f}s, geen tweede login), rol {me['role']}")
+        assert not [s for s in stages if s in ("ak-stage-identification", "ak-stage-password")], stages
+        me = app.logins[-1]
+        assert me["email"] == "carol@login-e2e.test", me
+        assert f"vaultx:{slug}:admin" in me["groups"], me
+        assert me["alg"] == "RS256" and me["refresh_token"], me
+        shot(page, "carol-meteen-in-app")
+        print(
+            f"    carol: meteen in de app ({took:.1f}s, geen tweede login; Authentik-stappen: "
+            f"{', '.join(stages) or 'geen'}), ID-token {me['alg']}"
+        )
         page.context.close()
 
-        # alice: nog geen sessie, dus eerst de Authentik-aanmelding, dan terug in Grafana.
+        # alice: nog geen sessie, dus eerst de Authentik-aanmelding, dan terug in de app.
         page = browser.new_context(locale="en-US").new_page()
-        page.goto(f"{grafana}/")
+        alice_stages = watch_stages(page)
+        page.goto(f"{app.url}/")
         page.wait_for_url(f"{authentik}/**", timeout=60000)
         shot(page, "alice-authentik")
         authentik_login(page, "alice-login-e2e")
-        page.wait_for_url(f"{grafana}/**", timeout=60000)
-        page.wait_for_function("() => !location.pathname.startsWith('/login')", timeout=60000)
-        me = grafana_user(page, grafana)
-        assert me["login"] == "alice-login-e2e" and me["role"] == "Viewer", me
-        page.wait_for_timeout(1500)
-        shot(page, "alice-grafana")
-        print(f"    alice: via Authentik in Grafana, rol {me['role']}")
+        logged_in(page, "alice-login-e2e")
+        # Controle op de controle: zonder sessie ziet de browser wel de aanmeldstap.
+        assert "ak-stage-identification" in alice_stages, alice_stages
+        assert f"vaultx:{slug}" in app.logins[-1]["groups"], app.logins[-1]
+        print("    alice: via de Authentik-aanmelding in de app")
         page.context.close()
 
         # eve: geen lid van de organisatie, Authentik weigert.
         page = browser.new_context(locale="en-US").new_page()
-        page.goto(f"{grafana}/")
+        page.goto(f"{app.url}/")
         page.wait_for_url(f"{authentik}/**", timeout=60000)
         authentik_login(page, "eve-login-e2e")
         page.wait_for_function(
@@ -158,7 +295,8 @@ def browser_check(authentik: str, grafana: str, shots: Path | None) -> None:
             "/Permission denied|denied/i.test(e.shadowRoot.textContent))",
             timeout=60000,
         )
-        assert not page.url.startswith(grafana), page.url
+        assert not page.url.startswith(app.url), page.url
+        assert all(u["username"] != "eve-login-e2e" for u in app.logins), app.logins
         shot(page, "eve-geweigerd")
         print(f"    eve: geweigerd door Authentik ({page.url.split('?')[0]})")
         page.context.close()
@@ -171,12 +309,10 @@ def main() -> None:
         "--authentik", default="http://localhost:9000", help="Authentik, voor VaultX én de browser"
     )
     ap.add_argument("--authentik-token", required=True, help="beheertoken (enkel voor de voorbereiding)")
-    ap.add_argument("--grafana", default="http://localhost:3000", help="Grafana (ook zijn root_url)")
-    ap.add_argument("--grafana-password", required=True, help="wachtwoord van de Grafana-gebruiker admin")
     ap.add_argument("--browser", action="store_true", help="ook aanmelden in Chromium (playwright)")
     ap.add_argument("--screenshots", type=Path)
     args = ap.parse_args()
-    authentik, grafana = args.authentik.rstrip("/"), args.grafana.rstrip("/")
+    authentik = args.authentik.rstrip("/")
     if args.screenshots:
         args.screenshots.mkdir(parents=True, exist_ok=True)
 
@@ -193,23 +329,11 @@ def main() -> None:
     admins = ak.ensure_group(f"vaultx:{slug}:admin")
     for user, groups in (("alice", [member["pk"]]), ("carol", [admins["pk"]]), ("eve", [])):
         ak.ensure_user(f"{user}-login-e2e", groups)
-        # Grafana weigert een aanmelding zonder e-mailadres (zie docs/autologin.md).
         pk = ak.one("/core/users/", username=f"{user}-login-e2e")["pk"]
         ak.c.patch(f"/core/users/{pk}/", json={"email": f"{user}@login-e2e.test"}).raise_for_status()
 
-    step("Grafana voorbereiden: geen OAuth-login, eigen aanmeldformulier")
-    g = grafana_client(grafana, args.grafana_password)
-    for _ in range(60):
-        try:
-            if g.get("/health").status_code == 200:
-                break
-        except httpx.TransportError:
-            pass
-        time.sleep(2)
-    r = g.delete("/v1/sso-settings/generic_oauth")
-    assert r.status_code in (204, 404), r.text  # 404: stond niet in de database
-    assert grafana_login_status(grafana)[0] == 200
-
+    testapp = TestApp()
+    testapp.start()
     fake = FakeOIDCProvider()
     fake.start()
     port = free_port()
@@ -245,90 +369,73 @@ def main() -> None:
         else:
             raise SystemExit("backend start niet")
 
-        step("VaultX: organisatie en app 'Grafana' in de catalogus")
+        step("VaultX: organisatie en app 'Testapp' in de catalogus")
         admin = httpx.Client(base_url=base, trust_env=False, timeout=120, headers=CSRF)
         login(admin, fake, "admin-login-e2e", "admin-login-e2e@example.com", ["vaultx-admins"])
         org = admin.post("/api/v1/organizations", json={"slug": slug, "name": "Login e2e"}).raise_for_status()
         org_id = org.json()["id"]
         app = admin.post(
             f"/api/v1/organizations/{org_id}/applications",
-            json={"name": "Grafana", "app_type": "grafana", "url": grafana},
+            json={"name": "Testapp", "url": testapp.url},
         ).raise_for_status()
         lbase = f"/api/v1/organizations/{org_id}/applications/{app.json()['id']}/login"
         state = admin.get(lbase).raise_for_status().json()
         assert state["configured"] and state["authentik_url"] == authentik, state
-        assert [t["key"] for t in state["templates"]] == ["grafana", "oidc"], state
+        assert state["suggested_app_url"] == testapp.url, state
 
-        step("Voorbeeld met Grafana-beheerder: nog niets gewijzigd")
-        body = {
-            "template": "grafana",
-            "access": "organization",
-            "grafana": {"url": grafana, "username": "admin", "password": args.grafana_password},
-        }
+        step("Voorbeeld: nog niets gewijzigd")
+        body = {"access": "organization", "redirect_uris": [testapp.redirect_uri]}
         plan = admin.post(f"{lbase}/preview", json=body).raise_for_status().json()
         blocks = [c["message"] for c in plan["checks"] if c["level"] == "block"]
-        assert not blocks and plan["can_apply"] and plan["configure_app"], plan
+        assert not blocks and plan["can_apply"], plan
         for s in plan["steps"]:
             print(f"      - {s}")
         assert plan["groups"] == [f"vaultx:{slug}", f"vaultx:{slug}:admin"], plan["groups"]
         assert not ak.get("/providers/oauth2/", search="VaultX login: ")
-        assert grafana_login_status(grafana)[0] == 200
 
-        step("Inrichten: Authentik-provider, applicatie, groepsbinding en de login in Grafana")
+        step("Inrichten: Authentik-provider, applicatie en groepsbinding")
         started = time.monotonic()
         r = admin.post(lbase, json=body)
         assert r.status_code == 201, r.text
         login_row = r.json()
-        print(f"    klaar in {time.monotonic() - started:.1f}s; controle: {login_row['last_check_message']}")
-        assert login_row["app_configured"] and login_row["last_check_status"] == "ok", login_row
+        print(f"    klaar in {time.monotonic() - started:.1f}s")
         provider = ak.one("/providers/oauth2/", search="VaultX login: ")
         assert provider and provider["client_id"] == login_row["client_id"], provider
-        assert [u["url"] for u in provider["redirect_uris"]] == [f"{grafana}/login/generic_oauth"], provider
+        assert [u["url"] for u in provider["redirect_uris"]] == [testapp.redirect_uri], provider
         assert provider["signing_key"], "ID-tokens horen RS256 getekend te zijn"
         akapp = ak.one("/core/applications/", slug=login_row["application_slug"], superuser_full_list="true")
-        assert akapp is not None
+        assert akapp is not None and akapp["meta_launch_url"] == testapp.url, akapp
         bindings = ak.get("/policies/bindings/", target=akapp["pk"])
         assert sorted(b["group_obj"]["name"] for b in bindings) == plan["groups"], bindings
-        settings = g.get("/v1/sso-settings/generic_oauth").raise_for_status().json()["settings"]
-        assert settings["enabled"] and settings["autoLogin"] and settings["usePkce"], settings
-        status, location = grafana_login_status(grafana)
-        assert status in (302, 307) and "/login/generic_oauth" in location, (status, location)
 
-        if args.browser:
-            step("Browser: carol (al aangemeld bij Authentik), alice (lid) en eve (geen lid)")
-            browser_check(authentik, grafana, args.screenshots)
-
-        step("Config met client secret opvragen (staat in de auditlog)")
+        step("Instellingen met client secret opvragen en in de app zetten (staat in de auditlog)")
         cfg = admin.get(f"{lbase}/config").raise_for_status().json()
         assert cfg["client_secret"] and cfg["client_id"] == provider["client_id"]
-        assert any(f["name"] == "grafana.ini" for f in cfg["files"])
+        assert cfg["client_secret"] in cfg["text"]
+        testapp.configure(cfg)
+        assert testapp.cfg["discovery"]["issuer"] == cfg["issuer"], testapp.cfg["discovery"]["issuer"]
+        print(f"    issuer {cfg['issuer']} antwoordt")
         audit = admin.get("/api/v1/audit", params={"action": "app_login.", "limit": 20}).json()["items"]
         assert {"app_login.configure", "app_login.config_viewed"} <= {a["action"] for a in audit}, audit
 
-        step("Weghalen: Grafana terug naar zijn eigen aanmelding, Authentik opgeruimd")
-        r = admin.post(f"{lbase}/remove", json={"grafana": body["grafana"]})
+        if args.browser:
+            step("Browser: carol (al aangemeld bij Authentik), alice (lid) en eve (geen lid)")
+            browser_check(authentik, testapp, slug, args.screenshots)
+
+        step("Weghalen: provider en applicatie in Authentik opgeruimd")
+        r = admin.post(f"{lbase}/remove", json={})
         assert r.status_code == 200 and r.json() is None, r.text
-        assert grafana_login_status(grafana)[0] == 200
         assert not ak.get("/providers/oauth2/", search="VaultX login: ")
         assert (
             ak.one("/core/applications/", slug=login_row["application_slug"], superuser_full_list="true")
             is None
         )
-
-        step("Generiek OIDC-sjabloon met eigen redirect URI")
-        oidc = {"template": "oidc", "access": "all", "redirect_uris": [f"{grafana}/oidc/callback"]}
-        r = admin.post(lbase, json=oidc)
-        assert r.status_code == 201, r.text
-        cfg = admin.get(f"{lbase}/config").raise_for_status().json()
-        well_known = httpx.get(cfg["discovery_url"], trust_env=False, timeout=10).raise_for_status().json()
-        assert well_known["issuer"] == cfg["issuer"], (well_known["issuer"], cfg["issuer"])
-        print(f"    issuer {cfg['issuer']} antwoordt")
-        r = admin.post(f"{lbase}/remove", json={})
-        assert r.status_code == 200 and r.json() is None, r.text
-        assert not ak.get("/providers/oauth2/", search="VaultX login: ")
-        step("OK: automatische login voor Grafana via Authentik, ingericht en opgeruimd door VaultX")
+        gone = httpx.get(cfg["discovery_url"], trust_env=False, timeout=10)
+        assert gone.status_code == 404, gone.status_code
+        step("OK: automatische login via Authentik, ingericht en opgeruimd door VaultX")
     finally:
         backend.terminate()
+        testapp.stop()
         try:
             backend.wait(timeout=10)
         except subprocess.TimeoutExpired:

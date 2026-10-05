@@ -154,7 +154,7 @@ jobs:
           docker logs npm 2>&1 | tail -40
 
   autologin-e2e:
-    # Fase 5: automatische login voor Grafana via Authentik, tegen echte Authentik en Grafana (zie e2e/README.md)
+    # Fase 5: automatische login via Authentik, tegen echte Authentik met een test-app in de browser (zie e2e/README.md)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -177,7 +177,7 @@ jobs:
           cache-dependency-path: backend/requirements*.txt
       - run: pip install -r backend/requirements-dev.txt playwright==1.56.0
       - run: python -m playwright install --with-deps chromium
-      - name: Authentik en Grafana starten
+      - name: Authentik starten
         run: |
           docker network create ak
           docker run -d --name ak-db --network ak -e POSTGRES_DB=authentik -e POSTGRES_USER=authentik \
@@ -201,24 +201,18 @@ jobs:
           docker run -d --name ak-server --network ak -p 9000:9000 --env-file ak.env \
             docker.io/authentik/server:2026.8.3 server
           docker run -d --name ak-worker --network ak --env-file ak.env docker.io/authentik/server:2026.8.3 worker
-          # Grafana op het hostnetwerk: zo bereikt het Authentik op localhost:9000, net als de browser.
-          docker run -d --name grafana --network host -e GF_SECURITY_ADMIN_PASSWORD=ci-grafana-password \
-            -e GF_SERVER_ROOT_URL=http://localhost:3000/ docker.io/grafana/grafana:13.2.3
-          for i in $(seq 1 60); do curl -sf http://localhost:3000/api/health && break; sleep 3; done
           for i in $(seq 1 100); do curl -sf http://localhost:9000/-/health/ready/ && break; sleep 3; done
       - name: Automatische login inrichten, aanmelden in de browser, weghalen
         working-directory: backend
         env:
           VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
         run: |
-          python ../e2e/autologin_e2e.py --authentik http://localhost:9000 --authentik-token $AK_TOKEN \
-            --grafana http://localhost:3000 --grafana-password ci-grafana-password --browser
+          python ../e2e/autologin_e2e.py --authentik http://localhost:9000 --authentik-token $AK_TOKEN --browser
       - name: Logs bij een fout
         if: failure()
         run: |
           docker logs ak-server 2>&1 | tail -60
           docker logs ak-worker 2>&1 | tail -30
-          docker logs grafana 2>&1 | tail -40
 
   bitwarden-e2e:
     # Officiële Bitwarden CLI tegen de VaultX-backend (zie e2e/README.md)

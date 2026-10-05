@@ -33,10 +33,6 @@ def app_status(app: Application) -> str:
         return "offline"
     if app.auth_method in AUTHENTIK_METHODS:
         return "protected"
-    login = app.login
-    if login is not None and login.last_check_status == "ok":
-        # Fase 5: de app meldt zelf aan via Authentik en VaultX zag dat werken.
-        return "protected"
     if app.auth_method in RESTRICTED_METHODS:
         return "restricted"
     if app.auth_method == AuthMethod.none.value:
@@ -154,7 +150,7 @@ class CatalogService:
         app = await self._app_visible(p, org_id, app_id)
         await self._require_manage(p, "application.delete", org_id, app_id)
         if app.login is not None:
-            # Anders blijven de provider en applicatie in Authentik achter (en Grafana wijst ernaar).
+            # Anders blijven de provider en applicatie in Authentik achter.
             raise InvalidOperationError("Haal eerst de automatische login van deze app weg")
         # Hosts van dit item krijgen "negeren", anders maakt de volgende sync het opnieuw aan.
         ignored = []
