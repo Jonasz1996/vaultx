@@ -6,6 +6,12 @@ from app.repositories.memberships import MembershipRepository
 from app.repositories.organizations import OrganizationRepository, TeamRepository
 from app.repositories.sessions import SessionRepository
 from app.repositories.users import UserRepository
+from app.repositories.vault import (
+    VaultAccountRepository,
+    VaultCipherRepository,
+    VaultDeviceRepository,
+    VaultFolderRepository,
+)
 
 __all__ = [
     "ApplicationRepository",
@@ -17,4 +23,8 @@ __all__ = [
     "SessionRepository",
     "TeamRepository",
     "UserRepository",
+    "VaultAccountRepository",
+    "VaultCipherRepository",
+    "VaultDeviceRepository",
+    "VaultFolderRepository",
 ]

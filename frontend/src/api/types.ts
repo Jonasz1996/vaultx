@@ -235,3 +235,30 @@ export interface Application {
   created_at: string;
   updated_at: string;
 }
+
+export interface VaultDevice {
+  id: string;
+  name: string;
+  type: number;
+  type_name: string;
+  created_at: string;
+  last_seen_at: string;
+  revoked_at: string | null;
+}
+
+export interface VaultStatus {
+  enrolled: boolean;
+  email: string | null;
+  blocked_reason: string | null;
+  server_url: string;
+  kdf: number | null;
+  kdf_iterations: number | null;
+  kdf_memory: number | null;
+  kdf_parallelism: number | null;
+  enrolled_at: string | null;
+  revision_date: string | null;
+  item_count: number;
+  trash_count: number;
+  folder_count: number;
+  devices: VaultDevice[];
+}

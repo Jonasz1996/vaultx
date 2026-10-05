@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import auth, health
+from app.api import auth, bitwarden, health
 from app.api.v1 import api_router
 from app.core.config import get_settings
 from app.core.context import RequestIdMiddleware
@@ -39,7 +39,8 @@ def create_app() -> FastAPI:
         version=__version__,
         description=(
             "VaultX: identiteit (Authentik/OIDC), multi-tenancy, audit, "
-            "NPM-connector en applicatiecatalogus. Nog geen kluisfunctionaliteit."
+            "NPM-connector, applicatiecatalogus en een persoonlijke kluis die werkt "
+            "met de officiële Bitwarden®-clients. Niet verbonden met Bitwarden, Inc."
         ),
         lifespan=lifespan,
         docs_url="/api/docs",
@@ -51,6 +52,9 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(api_router)
+    # Bitwarden-compatibele endpoints (/identity, /api/...) na de eigen API, zodat
+    # /api/v1 altijd voorrang heeft.
+    app.include_router(bitwarden.router)
     return app
 
 

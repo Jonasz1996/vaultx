@@ -170,3 +170,7 @@ pre.snippet { max-width: none; margin: 8px 0; }
 .stat-button:hover { background: var(--surface-2); }
 .stat-button.selected { outline: 2px solid var(--primary); outline-offset: -1px; }
 .modal .field select { width: 100%; }
+
+/* Kluis */
+.steps { margin: 0 0 8px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.stats + .card { margin-top: 16px; }

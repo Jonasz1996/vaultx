@@ -13,6 +13,7 @@ export default defineConfig({
       "/api": backend,
       "/auth": backend,
       "/health": backend,
+      "/identity": backend,
     },
   },
   build: {

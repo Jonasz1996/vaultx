@@ -5,6 +5,7 @@ from app.models.membership import Membership, MembershipSource, OrgRole, TeamRol
 from app.models.organization import Organization, Team
 from app.models.session import UserSession
 from app.models.user import User
+from app.models.vault import KdfType, VaultAccount, VaultCipher, VaultDevice, VaultFolder
 
 __all__ = [
     "AppSource",
@@ -13,6 +14,7 @@ __all__ = [
     "AuthMethod",
     "Base",
     "DiscoveredHost",
+    "KdfType",
     "Membership",
     "MembershipSource",
     "NpmConnection",
@@ -22,4 +24,8 @@ __all__ = [
     "TeamRole",
     "User",
     "UserSession",
+    "VaultAccount",
+    "VaultCipher",
+    "VaultDevice",
+    "VaultFolder",
 ]
