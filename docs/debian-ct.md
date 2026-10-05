@@ -22,10 +22,21 @@ build slaagt; je kan die waarschuwing negeren of Node 22 via NodeSource installe
 
 ## 2. Database
 
+Controleer eerst de codering met `runuser -u postgres -- psql -l`. Een kale
+Proxmox-template heeft geen locale, waardoor de cluster in `SQL_ASCII` staat;
+de migratie faalt dan met `TypeError: cannot use a string pattern on a
+bytes-like object`. Staat er `SQL_ASCII`, maak de cluster dan opnieuw aan in
+UTF-8 (op een verse installatie gaat er niets verloren):
+
+```bash
+pg_dropcluster 17 main --stop
+pg_createcluster 17 main --locale C.UTF-8 --start
+```
+
+Daarna de rol en de database:
+
 ```bash
 runuser -u postgres -- createuser vaultx --pwprompt
-# Expliciet UTF8: Proxmox-templates hebben geen locale, waardoor PostgreSQL anders
-# SQL_ASCII kiest en de migratie faalt ("cannot use a string pattern on a bytes-like object").
 runuser -u postgres -- createdb vaultx --owner vaultx --encoding UTF8 --locale C.UTF-8 --template template0
 ```
 
