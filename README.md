@@ -1,10 +1,19 @@
 # VaultX
 
 Self-hosted wachtwoord- en secretsplatform met Authentik als identiteitsbron
-en Nginx Proxy Manager-integratie. Deze repository bevat **phase-0**: een dunne
-verticale slice die de fundering bewijst, nog zonder kluisfunctionaliteit.
+en Nginx Proxy Manager-integratie. Deze repository bevat **phase-0** (de
+fundering) en **fase 1** (NPM-connector en applicatiecatalogus), nog zonder
+kluisfunctionaliteit.
 
-**Wel in phase-0**
+**Fase 1**
+
+- NPM-connector: leest alle proxy hosts uit Nginx Proxy Manager, periodiek en op verzoek
+- Herkent Authentik forward auth, access lists, bekende applicaties en `vaultx.*`-labels in *Advanced*
+- Applicatiecatalogus met status per applicatie (beschermd via Authentik, beperkt, open, offline, ...)
+  en waarschuwingen zoals "Satisfy Any omzeilt Authentik"
+- Zie [docs/npm.md](docs/npm.md)
+
+**Phase-0**
 
 - Login/logout via Authentik (OIDC, PKCE, back-channel logout)
 - Gebruikers worden automatisch aangemaakt; beheerders en lidmaatschappen volgen de Authentik-groepen
@@ -14,8 +23,8 @@ verticale slice die de fundering bewijst, nog zonder kluisfunctionaliteit.
 - OpenAPI-documentatie op `/api/docs`
 - Docker Compose, en een handleiding voor een Debian-container zonder Docker
 
-**Nog niet**: kluis, encryptie, Bitwarden-compatibiliteit, bijlagen. De
-volgende slice is de NPM-connector en de applicatiecatalogus.
+**Nog niet**: kluis, encryptie, Bitwarden-compatibiliteit, bijlagen, en
+schrijven naar NPM.
 
 ## Snel starten met Docker Compose
 
@@ -26,14 +35,14 @@ curl http://localhost:8080/health
 ```
 
 Zet Nginx Proxy Manager voor poort 8080. De Authentik-kant staat in
-[docs/authentik.md](docs/authentik.md). Zonder Docker: [docs/debian-ct.md](docs/debian-ct.md).
+[docs/authentik.md](docs/authentik.md), de NPM-koppeling in [docs/npm.md](docs/npm.md). Zonder Docker: [docs/debian-ct.md](docs/debian-ct.md).
 
 ## Structuur
 
 ```
 backend/
   app/
-    api/            routers: health, auth (OIDC), v1 (me, users, organizations, audit)
+    api/            routers: health, auth (OIDC), v1 (me, users, organizations, audit, catalog, npm)
     core/           config, database, fouten, request-context
     models/         SQLAlchemy 2-modellen
     repositories/   data-toegang, geen businessregels
@@ -45,8 +54,8 @@ backend/
 frontend/           React 19 + Vite + TanStack Query
 docker/             Dockerfiles, Compose, nginx, lokale Authentik met blueprint
 deploy/debian/      systemd-unit en nginx-site voor een Debian-container
-e2e/                browsertest tegen echte Authentik
-docs/               Authentik-koppeling, Debian-installatie
+e2e/                browsertest tegen echte Authentik, connectortest tegen echte NPM
+docs/               Authentik-koppeling, NPM-koppeling, Debian-installatie
 ```
 
 De ontwerpdocumenten (`00-kernbeslissingen.md` en verder) staan in de root.

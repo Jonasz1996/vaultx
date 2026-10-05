@@ -131,3 +131,107 @@ export interface Dashboard {
   denied_24h: number;
   recent_events: AuditEntry[];
 }
+
+// ---------------------------------------------------------------- NPM en catalogus
+
+export type AuthMethod =
+  | "forward_auth"
+  | "oidc"
+  | "saml"
+  | "header"
+  | "access_list"
+  | "app"
+  | "none"
+  | "unknown";
+
+export type AppStatus = "protected" | "restricted" | "unprotected" | "unknown" | "offline" | "removed";
+
+export interface DetectionWarning {
+  code: string;
+  message: string;
+}
+
+export interface NpmConnection {
+  id: string;
+  organization_id: string;
+  name: string;
+  base_url: string;
+  identity: string;
+  verify_tls: boolean;
+  enabled: boolean;
+  npm_version: string | null;
+  last_sync_at: string | null;
+  last_sync_status: "ok" | "error" | null;
+  last_sync_error: string | null;
+  created_at: string;
+  updated_at: string;
+  host_count: number;
+}
+
+export interface SyncResult {
+  connection_id: string;
+  npm_version: string | null;
+  hosts_total: number;
+  hosts_new: number;
+  hosts_updated: number;
+  hosts_removed: number;
+  applications_created: number;
+  applications_updated: number;
+}
+
+export interface DiscoveredHost {
+  id: string;
+  connection_id: string;
+  npm_id: number;
+  domain_names: string[];
+  forward_scheme: string;
+  forward_host: string;
+  forward_port: number;
+  enabled: boolean;
+  nginx_online: boolean;
+  ssl: boolean;
+  ssl_forced: boolean;
+  access_list: string | null;
+  forward_auth: boolean;
+  detected_app_type: string | null;
+  detected_auth: AuthMethod;
+  labels: Record<string, string>;
+  warnings: DetectionWarning[];
+  ignored: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+  removed_at: string | null;
+  application: { id: string; name: string } | null;
+}
+
+export interface ApplicationHost {
+  id: string;
+  connection_id: string;
+  connection_name: string;
+  domain_names: string[];
+  forward: string;
+  enabled: boolean;
+  nginx_online: boolean;
+  ssl: boolean;
+  forward_auth: boolean;
+  warnings: DetectionWarning[];
+  removed_at: string | null;
+}
+
+export interface Application {
+  id: string;
+  organization_id: string;
+  name: string;
+  app_type: string | null;
+  url: string | null;
+  description: string | null;
+  auth_method: AuthMethod;
+  status: AppStatus;
+  tags: string[];
+  source: "npm" | "manual";
+  auto_update: boolean;
+  hosts: ApplicationHost[];
+  warning_count: number;
+  created_at: string;
+  updated_at: string;
+}

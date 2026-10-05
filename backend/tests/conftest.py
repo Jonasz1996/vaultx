@@ -16,6 +16,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from tests.fake_npm import FakeNPM
 from tests.fake_oidc import FakeOIDCProvider
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -38,15 +39,20 @@ os.environ.update(
         "VAULTX_OIDC_ADMIN_GROUPS": "vaultx-admins",
         "VAULTX_COOKIE_SECURE": "false",
         "VAULTX_LOG_LEVEL": "WARNING",
+        "VAULTX_NPM_SYNC_INTERVAL_MINUTES": "0",
     }
 )
 
 from app.core.config import get_settings  # noqa: E402
 from app.core.db import get_engine  # noqa: E402
 from app.main import create_app  # noqa: E402
+from app.services.npm_client import NPMClient  # noqa: E402
 from app.services.oidc import OIDCProvider  # noqa: E402
 
-TABLES = "user_sessions, memberships, teams, organizations, users, audit_logs"
+TABLES = (
+    "npm_hosts, npm_connections, applications, "
+    "user_sessions, memberships, teams, organizations, users, audit_logs"
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -76,10 +82,18 @@ def fake_oidc() -> FakeOIDCProvider:
     return FAKE
 
 
+@pytest.fixture
+def fake_npm() -> FakeNPM:
+    return FakeNPM()
+
+
 @pytest_asyncio.fixture
-async def app():
+async def app(fake_npm: FakeNPM):
     application = create_app()
     application.state.oidc = OIDCProvider(get_settings())
+    application.state.npm_client_factory = lambda conn: NPMClient(
+        conn.base_url, verify_tls=conn.verify_tls, transport=fake_npm.transport
+    )
     yield application
     await application.state.oidc.aclose()
 

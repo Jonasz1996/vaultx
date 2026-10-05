@@ -1,4 +1,4 @@
-"""VaultX phase-0: FastAPI-applicatie."""
+"""VaultX: FastAPI-applicatie."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -13,6 +13,7 @@ from app.core.context import RequestIdMiddleware
 from app.core.db import dispose_engine
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging
+from app.services.npm_scheduler import start_scheduler, stop_scheduler
 from app.services.oidc import OIDCProvider
 
 
@@ -21,9 +22,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     if not hasattr(app.state, "oidc"):
         app.state.oidc = OIDCProvider(settings)
+    scheduler = start_scheduler(settings)
     try:
         yield
     finally:
+        await stop_scheduler(scheduler)
         await app.state.oidc.aclose()
         await dispose_engine()
 
@@ -35,8 +38,8 @@ def create_app() -> FastAPI:
         title="VaultX",
         version=__version__,
         description=(
-            "VaultX phase-0: identiteit (Authentik/OIDC), multi-tenancy en audit. "
-            "Nog geen kluisfunctionaliteit."
+            "VaultX: identiteit (Authentik/OIDC), multi-tenancy, audit, "
+            "NPM-connector en applicatiecatalogus. Nog geen kluisfunctionaliteit."
         ),
         lifespan=lifespan,
         docs_url="/api/docs",
