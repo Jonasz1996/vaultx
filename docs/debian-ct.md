@@ -3,6 +3,11 @@
 Voor wie VaultX rechtstreeks op een Debian 13 (Trixie) LXC/CT wil draaien, met
 Nginx Proxy Manager ervoor. Voor Docker: zie de README.
 
+**Proxmox LXC:** zet bij de container *Options → Features → Nesting* aan. Zonder
+nesting faalt de systemd-hardening van de service met `status=226/NAMESPACE`.
+Proxmox-templates hebben geen `sudo`; de commando's hieronder gebruiken daarom
+`runuser`.
+
 ## 1. Pakketten
 
 ```bash
@@ -10,21 +15,24 @@ apt update
 apt install -y nginx git curl python3 python3-venv postgresql nodejs npm
 ```
 
-Debian 13 levert PostgreSQL 17 en Node 20; beide werken. Wil je PostgreSQL 18
+Debian 13 levert PostgreSQL 17 en Node 20.19; beide werken. `npm ci` geeft op
+Node 20 een `EBADENGINE`-waarschuwing (react-router vraagt Node 22+), maar de
+build slaagt; je kan die waarschuwing negeren of Node 22 via NodeSource installeren. Wil je PostgreSQL 18
 (de keuze uit het ontwerpdossier), gebruik dan de PGDG-repository.
 
 ## 2. Database
 
 ```bash
-sudo -u postgres createuser vaultx --pwprompt
-sudo -u postgres createdb vaultx --owner vaultx
+runuser -u postgres -- createuser vaultx --pwprompt
+runuser -u postgres -- createdb vaultx --owner vaultx
 ```
 
 ## 3. Code en Python-omgeving
 
 ```bash
 useradd --system --home /opt/vaultx --shell /usr/sbin/nologin vaultx
-git clone https://github.com/Jonasz1996/vaultx.git /opt/vaultx
+# Zolang phase-0 nog niet gemerged is, staat de code op de branch phase-0/skeleton.
+git clone -b phase-0/skeleton https://github.com/Jonasz1996/vaultx.git /opt/vaultx
 python3 -m venv /opt/vaultx/venv
 /opt/vaultx/venv/bin/pip install -r /opt/vaultx/backend/requirements.txt
 
@@ -50,7 +58,12 @@ VAULTX_OIDC_CLIENT_ID=...
 VAULTX_OIDC_CLIENT_SECRET=...
 ```
 
-De Authentik-kant staat in [authentik.md](authentik.md).
+De Authentik-kant staat in [authentik.md](authentik.md). Zet je eigen account in
+de Authentik-groep `vaultx-admins`, anders ben je na het inloggen geen beheerder.
+
+Het sessiecookie is `Secure`: inloggen werkt enkel via HTTPS (via NPM). Test je
+tijdelijk over gewoon http, zet dan `VAULTX_COOKIE_SECURE=false` en
+`VAULTX_PUBLIC_URL=http://...`, en draai het terug zodra NPM ervoor staat.
 
 ## 5. systemd en nginx
 
