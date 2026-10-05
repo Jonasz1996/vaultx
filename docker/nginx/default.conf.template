@@ -1,0 +1,55 @@
+# Interne nginx van VaultX: serveert de admin UI en proxyt de API.
+# Nginx Proxy Manager (of een andere reverse proxy) zet hier TLS voor en wijst naar poort 8080.
+
+upstream vaultx_backend {
+    server ${VAULTX_BACKEND};
+    keepalive 16;
+}
+
+# NPM zet X-Forwarded-Proto; zonder proxy ervoor valt het terug op het eigen schema.
+map $http_x_forwarded_proto $vaultx_proto {
+    default $http_x_forwarded_proto;
+    ""      $scheme;
+}
+
+server {
+    listen 8080;
+    server_name _;
+    server_tokens off;
+    client_max_body_size 1m;
+
+    # Echte client-IP overnemen van de proxy ervoor (NPM). Pas het bereik aan je netwerk aan.
+    set_real_ip_from 10.0.0.0/8;
+    set_real_ip_from 172.16.0.0/12;
+    set_real_ip_from 192.168.0.0/16;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    location ~ ^/(api|auth|health)(/|$) {
+        proxy_pass http://vaultx_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $vaultx_proto;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_read_timeout 30s;
+    }
+
+    location /assets/ {
+        root /usr/share/nginx/html;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header X-Content-Type-Options nosniff always;
+    }
+
+    location / {
+        root /usr/share/nginx/html;
+        try_files $uri /index.html;
+        add_header Cache-Control "no-cache";
+        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy same-origin always;
+        add_header X-Frame-Options DENY always;
+    }
+}

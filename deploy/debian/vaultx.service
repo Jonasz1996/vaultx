@@ -1,0 +1,35 @@
+# /etc/systemd/system/vaultx.service
+# VaultX backend op een Debian-container (zonder Docker). Zie docs/debian-ct.md.
+[Unit]
+Description=VaultX backend (FastAPI)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vaultx
+Group=vaultx
+WorkingDirectory=/opt/vaultx/backend
+EnvironmentFile=/etc/vaultx/vaultx.env
+ExecStartPre=/opt/vaultx/venv/bin/alembic upgrade head
+ExecStart=/opt/vaultx/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-server-header
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadOnlyPaths=/opt/vaultx
+
+[Install]
+WantedBy=multi-user.target
