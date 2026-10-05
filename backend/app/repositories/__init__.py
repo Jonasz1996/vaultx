@@ -3,6 +3,7 @@
 from app.repositories.audit import AuditRepository
 from app.repositories.catalog import (
     ApplicationRepository,
+    AppLoginRepository,
     AuthentikProtectionRepository,
     DiscoveredHostRepository,
     NpmChangeRepository,
@@ -20,6 +21,7 @@ from app.repositories.vault import (
 )
 
 __all__ = [
+    "AppLoginRepository",
     "ApplicationRepository",
     "AuditRepository",
     "AuthentikProtectionRepository",

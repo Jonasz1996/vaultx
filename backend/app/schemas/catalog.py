@@ -328,6 +328,7 @@ class ApplicationOut(BaseModel):
     auto_update: bool
     hosts: list[ApplicationHostOut]
     warning_count: int
+    auto_login: bool = Field(False, description="Fase 5: automatische login via Authentik ingericht")
     created_at: datetime
     updated_at: datetime
 

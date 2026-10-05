@@ -55,7 +55,8 @@ from app.services.npm_client import NPMClient  # noqa: E402
 from app.services.oidc import OIDCProvider  # noqa: E402
 
 TABLES = (
-    "authentik_protections, npm_changes, vault_ciphers, vault_folders, vault_devices, vault_accounts, "
+    "app_logins, authentik_protections, npm_changes, "
+    "vault_ciphers, vault_folders, vault_devices, vault_accounts, "
     "npm_hosts, npm_connections, applications, "
     "user_sessions, memberships, teams, organizations, users, audit_logs"
 )

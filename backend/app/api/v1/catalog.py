@@ -53,6 +53,7 @@ def app_out(a: Application) -> ApplicationOut:
             for h in hosts
         ],
         warning_count=sum(len(h.warnings) for h in hosts if h.removed_at is None),
+        auto_login=a.login is not None,
         created_at=a.created_at,
         updated_at=a.updated_at,
     )
