@@ -167,7 +167,10 @@ def test_protect_needs_outpost_and_is_idempotent():
 def test_no_tls_is_a_warning():
     plan = plan_protect(proxy_host(1, ["a.be"]), OUTPOST)
     assert not plan.blocked
-    assert [c.code for c in plan.checks if c.level == "warn"] == ["no_tls"]
+    assert [c.code for c in plan.checks if c.level == "warn"] == ["no_tls", "block_exploits_http"]
+    host = proxy_host(1, ["a.be"])
+    host["block_exploits"] = False
+    assert [c.code for c in plan_protect(host, OUTPOST).checks if c.level == "warn"] == ["no_tls"]
 
 
 def test_app_with_own_login_is_a_warning():

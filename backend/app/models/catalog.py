@@ -79,6 +79,9 @@ class NpmConnection(TimestampMixin, Base):
     probe_host: Mapped[str | None] = mapped_column(String(255))
     probe_http_port: Mapped[int] = mapped_column(Integer, default=80, server_default="80")
     probe_https_port: Mapped[int] = mapped_column(Integer, default=443, server_default="443")
+    # Fase 4: outpost (pk in Authentik) waaraan VaultX de proxy providers toewijst die het zelf
+    # aanmaakt. Leeg = VaultX maakt in Authentik niets aan (zoals in fase 3).
+    authentik_outpost_pk: Mapped[str | None] = mapped_column(String(64))
 
     hosts = relationship(
         "DiscoveredHost", back_populates="connection", cascade="all, delete-orphan", passive_deletes=True
@@ -227,7 +230,49 @@ class NpmChange(Base):
     after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     probe_before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     probe_after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Fase 4: wat VaultX in Authentik plande, aanmaakte, terugdraaide of opruimde.
+    authentik: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     message: Mapped[str | None] = mapped_column(Text)
     nginx_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AuthentikProtection(TimestampMixin, Base):
+    """Authentik-objecten achter een proxy host die VaultX beschermde (fase 4).
+
+    Per object staat of VaultX het zelf aanmaakte (`*_created`) of een bestaand
+    object hergebruikte. Bij "Bescherming weghalen" ruimt VaultX enkel op wat het
+    zelf aanmaakte, en haalt het de provider enkel van de outpost als VaultX hem
+    daar zelf op zette.
+    """
+
+    __tablename__ = "authentik_protections"
+    __table_args__ = (
+        UniqueConstraint("connection_id", "npm_id", name="uq_authentik_protections_connection_npm_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("npm_connections.id", ondelete="CASCADE"), index=True
+    )
+    npm_id: Mapped[int] = mapped_column(Integer)
+    domain: Mapped[str] = mapped_column(String(255))
+    external_host: Mapped[str] = mapped_column(String(2048))
+    outpost_pk: Mapped[str] = mapped_column(String(64))
+    outpost_name: Mapped[str | None] = mapped_column(String(255))
+    outpost_assigned: Mapped[bool] = mapped_column(Boolean, default=False)
+    provider_pk: Mapped[int] = mapped_column(Integer)
+    provider_name: Mapped[str] = mapped_column(String(255))
+    provider_created: Mapped[bool] = mapped_column(Boolean, default=False)
+    application_slug: Mapped[str | None] = mapped_column(String(255))
+    application_name: Mapped[str | None] = mapped_column(String(255))
+    application_created: Mapped[bool] = mapped_column(Boolean, default=False)
+    # "all" | "organization" | "team:<slug>"; namen van de gebonden groepen.
+    access: Mapped[str] = mapped_column(String(80))
+    groups: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    # Opruimen bij weghalen mislukte: wat er nog met de hand weg moet.
+    cleanup_error: Mapped[str | None] = mapped_column(Text)

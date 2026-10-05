@@ -3,8 +3,17 @@
 Self-hosted wachtwoord- en secretsplatform met Authentik als identiteitsbron
 en Nginx Proxy Manager-integratie. Deze repository bevat **phase-0** (de
 fundering), **fase 1** (NPM-connector en applicatiecatalogus), **fase 2**
-(een persoonlijke kluis voor de officiële Bitwarden®-clients) en **fase 3**
-(Authentik-bescherming zetten in NPM).
+(een persoonlijke kluis voor de officiële Bitwarden®-clients), **fase 3**
+(Authentik-bescherming zetten in NPM) en **fase 4** (ook de Authentik-kant
+automatisch aanmaken).
+
+**Fase 4**
+
+- "Beschermen met Authentik" in één stap: VaultX maakt ook de proxy provider (forward auth), de applicatie en de outpost-toewijzing in Authentik aan
+- Toegang per host: leden van de organisatie, van één team, of alle Authentik-gebruikers, via de bestaande `vaultx:`-groepconventie
+- Bestaande providers voor het domein worden hergebruikt; faalt iets, dan draait VaultX zowel NPM als Authentik terug; weghalen ruimt op wat VaultX aanmaakte
+- Werkt met een Authentik-serviceaccount met beperkte rechten, geen superuser-token
+- Getest tegen echte Authentik 2026.8.3 en NPM 2.16.0, met aanmelden in de browser (ook in CI). Zie [docs/npm.md](docs/npm.md#6-authentik-kant-automatisch-aanmaken)
 
 **Fase 3**
 

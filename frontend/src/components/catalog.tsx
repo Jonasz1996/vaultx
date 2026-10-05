@@ -1,5 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import type { Application, AuthMethod, DetectionWarning, NpmConnection } from "../api/types";
+import { api } from "../api/client";
+import type { Application, AuthentikOutposts, AuthMethod, DetectionWarning, NpmConnection } from "../api/types";
 import { authLabels, statusInfo } from "../format";
 import { Badge, ErrorBox } from "./ui";
 
@@ -141,14 +143,68 @@ export interface ConnectionValues {
   probe_host: string;
   probe_http_port: number;
   probe_https_port: number;
+  authentik_outpost_pk: string;
+}
+
+// Fase 4: kies de outpost waarop VaultX zelf providers zet. Leeg = VaultX maakt niets aan in Authentik.
+function OutpostPicker({
+  orgId,
+  value,
+  onChange,
+}: {
+  orgId: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const outposts = useQuery({
+    queryKey: ["authentik-outposts", orgId],
+    queryFn: () => api.get<AuthentikOutposts>(`/api/v1/organizations/${orgId}/authentik/outposts`),
+    enabled: !!orgId,
+    staleTime: 60_000,
+  });
+  const data = outposts.data;
+  const known = data?.outposts ?? [];
+  const selected = known.find((o) => o.pk === value);
+  return (
+    <label className="field">
+      <span>Authentik-kant automatisch aanmaken</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)} disabled={!data?.configured && !value}>
+        <option value="">Nee, de provider maak ik zelf in Authentik</option>
+        {known.map((o) => (
+          <option key={o.pk} value={o.pk}>
+            Ja, op outpost {o.name}
+          </option>
+        ))}
+        {value && !selected && <option value={value}>Ja, op outpost {value} (niet gevonden)</option>}
+      </select>
+      <small className="muted">
+        {outposts.isLoading
+          ? "Outposts ophalen uit Authentik…"
+          : !data?.configured
+            ? "De Authentik-API is niet ingesteld op de VaultX-server (VAULTX_AUTHENTIK_API_TOKEN)."
+            : data.error
+              ? `Authentik: ${data.error}`
+              : "VaultX maakt dan per host een proxy provider (forward auth), een applicatie en de groepsbinding " +
+                "aan, en zet de provider op deze outpost. Bij weghalen ruimt het die weer op."}
+      </small>
+      {selected && !selected.authentik_host && (
+        <small className="warn-box small">
+          Bij deze outpost is <code>authentik_host</code> leeg. Vul in Authentik bij de outpost de publieke URL van
+          Authentik in, anders weet de outpost niet waar een browser zich moet aanmelden.
+        </small>
+      )}
+    </label>
+  );
 }
 
 export function ConnectionForm({
+  orgId,
   initial,
   onSubmit,
   error,
   pending,
 }: {
+  orgId: string;
   initial?: NpmConnection;
   onSubmit: (v: ConnectionValues) => void;
   error: unknown;
@@ -166,6 +222,7 @@ export function ConnectionForm({
   const [probeHost, setProbeHost] = useState(initial?.probe_host ?? "");
   const [httpPort, setHttpPort] = useState(initial?.probe_http_port ?? 80);
   const [httpsPort, setHttpsPort] = useState(initial?.probe_https_port ?? 443);
+  const [outpostPk, setOutpostPk] = useState(initial?.authentik_outpost_pk ?? "");
   const submit = (e: FormEvent) => {
     e.preventDefault();
     onSubmit({
@@ -181,6 +238,7 @@ export function ConnectionForm({
       probe_host: probeHost.trim(),
       probe_http_port: httpPort,
       probe_https_port: httpsPort,
+      authentik_outpost_pk: outpostPk,
     });
   };
   return (
@@ -249,6 +307,7 @@ export function ConnectionForm({
             Authentik-server zelf.
           </small>
         </label>
+        <OutpostPicker orgId={orgId} value={outpostPk} onChange={setOutpostPk} />
         <div className="grid-form grid-probe">
           <label className="field">
             <span>Controleadres van NPM</span>

@@ -3,7 +3,14 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api/client";
 import { canManageOrg, useMe } from "../api/hooks";
-import type { DiscoveredHost, NpmConnection, Organization, ProtectionAction, SyncResult } from "../api/types";
+import type {
+  AuthentikOutposts,
+  DiscoveredHost,
+  NpmConnection,
+  Organization,
+  ProtectionAction,
+  SyncResult,
+} from "../api/types";
 import { AuthLabel, ConnectionForm, type ConnectionValues, HostLink, Warnings } from "../components/catalog";
 import { ChangeJournal, ProtectionDialog } from "../components/npmProtection";
 import { Badge, Card, Empty, ErrorBox, Loading, Modal, PageHeader } from "../components/ui";
@@ -27,6 +34,12 @@ export function NpmConnectionDetailPage() {
   const org = useQuery({
     queryKey: ["org", orgId],
     queryFn: () => api.get<Organization>(`/api/v1/organizations/${orgId}`),
+  });
+  const outposts = useQuery({
+    queryKey: ["authentik-outposts", orgId],
+    queryFn: () => api.get<AuthentikOutposts>(`/api/v1/organizations/${orgId}/authentik/outposts`),
+    enabled: manage && !!conn.data?.authentik_outpost_pk,
+    staleTime: 60_000,
   });
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ["npm-conn", connId] });
@@ -132,6 +145,20 @@ export function NpmConnectionDetailPage() {
             <>
               <dt>Authentik-outpost</dt>
               <dd className="mono">{c.authentik_outpost_url ?? <Badge tone="warn">niet ingesteld</Badge>}</dd>
+              <dt>Authentik-kant</dt>
+              <dd>
+                {c.authentik_outpost_pk ? (
+                  <>
+                    VaultX maakt provider en applicatie aan op outpost{" "}
+                    <strong>
+                      {outposts.data?.outposts.find((o) => o.pk === c.authentik_outpost_pk)?.name ??
+                        c.authentik_outpost_pk}
+                    </strong>
+                  </>
+                ) : (
+                  <span className="muted">met de hand in Authentik{manage && " (automatisch: via Bewerken)"}</span>
+                )}
+              </dd>
               <dt>Controleadres</dt>
               <dd className="mono">
                 {c.probe_host ?? new URL(c.base_url).hostname}, poort {c.probe_http_port} / {c.probe_https_port}
@@ -273,6 +300,8 @@ export function NpmConnectionDetailPage() {
       {protecting && (
         <ProtectionDialog
           base={base}
+          orgId={orgId}
+          authentik={!!c.authentik_outpost_pk}
           host={protecting.host}
           action={protecting.action}
           onClose={() => setProtecting(null)}
@@ -280,7 +309,13 @@ export function NpmConnectionDetailPage() {
         />
       )}
       <Modal title="Koppeling bewerken" open={editing} onClose={() => setEditing(false)}>
-        <ConnectionForm initial={c} onSubmit={(v) => update.mutate(v)} error={update.error} pending={update.isPending} />
+        <ConnectionForm
+          orgId={orgId}
+          initial={c}
+          onSubmit={(v) => update.mutate(v)}
+          error={update.error}
+          pending={update.isPending}
+        />
       </Modal>
     </>
   );

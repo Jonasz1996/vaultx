@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api/client";
 import type {
+  AuthentikChange,
   DiscoveredHost,
   HostConfig,
   NpmChange,
@@ -9,6 +10,7 @@ import type {
   ProbeResult,
   ProtectionAction,
   ProtectionPlan,
+  Team,
 } from "../api/types";
 import { actionLabels, changeStatusInfo, formatDate, relative } from "../format";
 import { Badge, Empty, ErrorBox, Loading, Modal } from "./ui";
@@ -63,6 +65,32 @@ function ProbeLine({ label, probe }: { label: string; probe: ProbeResult | null 
   );
 }
 
+function AuthentikLines({ ak }: { ak: AuthentikChange | null }) {
+  if (!ak) return null;
+  const s = ak.state ?? ak.remove;
+  if (!s) return null;
+  const made = [
+    s.provider_name && `provider '${s.provider_name}'${s.provider_created ? " (door VaultX)" : ""}`,
+    s.application_slug && `applicatie ${s.application_slug}${s.application_created ? " (door VaultX)" : ""}`,
+    s.outpost_name && `outpost '${s.outpost_name}'`,
+  ].filter(Boolean);
+  let outcome: string | null = null;
+  if (ak.undo_error) outcome = `terugdraaien mislukt: ${ak.undo_error}`;
+  else if (ak.cleanup_error) outcome = `opruimen mislukt: ${ak.cleanup_error}`;
+  else if (ak.undone) outcome = "teruggedraaid";
+  else if (ak.removed) outcome = "opgeruimd";
+  return (
+    <>
+      <dt>Authentik</dt>
+      <dd>
+        <span>{made.join(", ") || "—"}</span>
+        {s.groups.length > 0 && <span className="muted small">toegang: {s.groups.join(", ")}</span>}
+        {outcome && <span className="muted small">{outcome}</span>}
+      </dd>
+    </>
+  );
+}
+
 function ChangeResult({ change }: { change: NpmChange }) {
   const box = change.status === "applied" ? "good-box" : change.status === "refused" ? "info-box" : "warn-box";
   return (
@@ -73,6 +101,7 @@ function ChangeResult({ change }: { change: NpmChange }) {
       <dl className="kv">
         <ProbeLine label="Controle vooraf" probe={change.probe_before} />
         <ProbeLine label="Controle achteraf" probe={change.probe_after} />
+        <AuthentikLines ak={change.authentik} />
         {change.nginx_error && (
           <>
             <dt>nginx-fout</dt>
@@ -90,23 +119,62 @@ function ChangeResult({ change }: { change: NpmChange }) {
   );
 }
 
+// Toegang tot de Authentik-applicatie die VaultX aanmaakt (fase 4).
+function AccessPicker({
+  orgId,
+  value,
+  onChange,
+}: {
+  orgId: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const teams = useQuery({
+    queryKey: ["teams", orgId],
+    queryFn: () => api.get<Team[]>(`/api/v1/organizations/${orgId}/teams`),
+  });
+  return (
+    <label className="field">
+      <span>Wie mag de applicatie openen na de Authentik-aanmelding?</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="organization">Leden van deze organisatie</option>
+        {(teams.data ?? []).map((t) => (
+          <option key={t.id} value={`team:${t.slug}`}>
+            Leden van team {t.name}
+          </option>
+        ))}
+        <option value="all">Alle Authentik-gebruikers</option>
+      </select>
+      <small className="muted">
+        VaultX bindt de Authentik-groepen volgens de groepconventie (bv. <code>vaultx:organisatie</code> of{" "}
+        <code>vaultx:organisatie/team</code>) aan de applicatie.
+      </small>
+    </label>
+  );
+}
+
 export function ProtectionDialog({
   base,
+  orgId,
+  authentik,
   host,
   action,
   onClose,
   onDone,
 }: {
   base: string;
+  orgId: string;
+  authentik: boolean;
   host: DiscoveredHost;
   action: ProtectionAction;
   onClose: () => void;
   onDone: () => void;
 }) {
   const url = `${base}/hosts/${host.id}/protection`;
+  const [access, setAccess] = useState("organization");
   const plan = useQuery({
-    queryKey: ["npm-plan", host.id, action],
-    queryFn: () => api.get<ProtectionPlan>(url, { action }),
+    queryKey: ["npm-plan", host.id, action, access],
+    queryFn: () => api.get<ProtectionPlan>(url, { action, access }),
     staleTime: 0,
     gcTime: 0,
     refetchOnWindowFocus: false,
@@ -118,6 +186,7 @@ export function ProtectionDialog({
         action,
         expected_modified_on: p.modified_on,
         verify: verify && p.probe_url !== null,
+        access,
       }),
     onSettled: onDone,
   });
@@ -136,7 +205,12 @@ export function ProtectionDialog({
       </>
     );
   } else if (plan.isLoading) {
-    body = <Loading />;
+    body = (
+      <>
+        {action === "protect" && authentik && <AccessPicker orgId={orgId} value={access} onChange={setAccess} />}
+        <Loading />
+      </>
+    );
   } else if (!plan.data) {
     body = <ErrorBox error={plan.error} />;
   } else {
@@ -144,6 +218,7 @@ export function ProtectionDialog({
     const canVerify = p.probe_url !== null;
     body = (
       <div className="form">
+        {action === "protect" && authentik && <AccessPicker orgId={orgId} value={access} onChange={setAccess} />}
         {p.checks.length > 0 && (
           <ul className="checks">
             {p.checks.map((c) => (
@@ -155,7 +230,7 @@ export function ProtectionDialog({
         )}
         {p.steps.length > 0 && (
           <div>
-            <strong>Wat VaultX in NPM wijzigt</strong>
+            <strong>{p.authentik ? "Wat VaultX in Authentik en NPM wijzigt" : "Wat VaultX in NPM wijzigt"}</strong>
             <ol className="steps">
               {p.steps.map((s) => (
                 <li key={s}>{s}</li>
