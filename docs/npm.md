@@ -2,11 +2,14 @@
 
 VaultX leest de proxy hosts uit Nginx Proxy Manager (NPM) en vult daarmee de
 **applicatiecatalogus**: welke applicaties er draaien, op welk domein, en hoe
-je er binnenkomt (via Authentik of niet). In deze fase **leest** VaultX enkel;
-er wordt niets in NPM gewijzigd.
+je er binnenkomt (via Authentik of niet). Standaard **leest** VaultX enkel.
+Zet je schrijven aan op de koppeling, dan kan een beheerder per host
+**Authentik-bescherming laten zetten of weghalen** (sectie 5): VaultX toont eerst
+wat het wijzigt, controleert de host achteraf en zet bij een fout de vorige
+config terug.
 
 Getest tegen NPM 2.16.0 (CI start bij elke push een echte NPM, zie
-`e2e/npm_e2e.py`).
+`e2e/npm_e2e.py` en `e2e/npm_write_e2e.py`).
 
 ## 1. Een NPM-account voor VaultX
 
@@ -16,10 +19,11 @@ Maak in NPM onder *Users* een apart account aan, bijvoorbeeld
 | Recht | Waarde | Waarom |
 | --- | --- | --- |
 | Visibility | **All Items** | Met "Created Items Only" ziet VaultX enkel hosts die dit account zelf maakte |
-| Proxy Hosts | View Only | VaultX leest enkel |
+| Proxy Hosts | **View Only**, of **Manage** als VaultX Authentik-bescherming mag zetten | |
 | Rest | Hidden | NPM geeft de access list (naam, "Satisfy Any") mee bij de host |
 
-Zo getest op NPM 2.16.0.
+Zo getest op NPM 2.16.0. Met *View Only* weigert NPM elke schrijfpoging, ook
+als schrijven in VaultX aanstaat.
 
 Zet **geen tweestapsverificatie** op dit account: VaultX kan de 2FA-code niet
 invullen en meldt dat duidelijk. Bescherm het account met een lang willekeurig
@@ -111,6 +115,103 @@ geeft in de catalogus:
 Elke sync, elke wijziging en elke geweigerde poging komt in de auditlog van de
 organisatie (`npm.sync`, `npm_connection.*`, `npm_host.updated`, `application.*`).
 
+## 5. Authentik-bescherming zetten
+
+Op de pagina van een koppeling staat bij elke host zonder Authentik de knop
+**Beschermen met Authentik**, en bij hosts die VaultX beschermde **Bescherming
+weghalen**. VaultX zet dan het [officiële Authentik-patroon voor
+NPM](https://docs.goauthentik.io/add-secure-apps/providers/proxy/server_nginx/)
+in de host.
+
+### Vooraf
+
+1. **In Authentik**: een *Proxy Provider* in forward-auth-modus voor het domein
+   (*single application* met de externe URL van de host, of *domain level*),
+   met een applicatie, en toegewezen aan een outpost. VaultX maakt die nog niet
+   zelf aan. Zonder provider antwoordt de outpost niet met een aanmelding; de
+   controle achteraf faalt dan en VaultX zet terug.
+2. **Op de koppeling** (*Bewerken*):
+   - **VaultX mag proxy hosts in deze NPM wijzigen** aanzetten (standaard uit), en
+     het NPM-account *Proxy Hosts: Manage* geven.
+   - **Authentik-outpost, gezien vanuit NPM**: het adres waarop nginx in de
+     NPM-container de outpost bereikt, zonder pad. Voor de ingebouwde outpost is
+     dat de Authentik-server, bv. `http://authentik-server:9000` op een gedeeld
+     Docker-netwerk of `http://192.168.1.20:9000`.
+   - **Controleadres van NPM** en de poorten: waar VaultX NPM's proxypoorten
+     (80/443) bereikt om een host te controleren. Leeg = de host van de
+     beheer-URL. VaultX stuurt de domeinnaam mee als Host-header en SNI, dus DNS
+     hoeft niet naar NPM te wijzen.
+
+### Wat VaultX wijzigt
+
+- In *Advanced* van de host, achter wat er al staat: `proxy_buffers`,
+  `proxy_buffer_size` en `port_in_redirect off` (enkel als ze er nog niet
+  staan), `location /outpost.goauthentik.io` en `location @goauthentik_proxy_signin`.
+- In elke custom location vooraan: `auth_request` naar de outpost en de
+  `X-authentik-*`-headers (username, groups, entitlements, email, name, uid)
+  naar de applicatie. Heeft de host geen custom location `/`, dan maakt VaultX
+  er een aan met dezelfde forward host, poort en scheme. NPM neemt daarin zelf
+  de access list en websocket-instellingen van de host over.
+- Alles staat tussen
+  `# >>> vaultx:authentik (beheerd door VaultX, niet met de hand wijzigen)` en
+  `# <<< vaultx:authentik`. Een location die VaultX aanmaakte, draagt
+  `# vaultx:created-location`. **Bescherming weghalen** haalt precies die blokken
+  en locations weer weg; wat je zelf schreef, blijft staan.
+- VaultX zet nooit een eigen `location /` in *Advanced*: dan laat NPM zijn
+  standaardlocatie weg, en daarmee de access list.
+
+### Controles vooraf
+
+VaultX toont eerst een voorbeeld: de stappen, de config ervoor en erna, en wat
+het tegenhoudt. Het weigert als:
+
+| Code | Waarom |
+| --- | --- |
+| `write_disabled` | Schrijven staat uit op de koppeling. |
+| `no_outpost_url` | Geen outpost-URL ingesteld. |
+| `already_protected`, `already_managed` | De host heeft al Authentik (met de hand of door VaultX). |
+| `foreign_auth_request` | Er staat al een `auth_request` naar iets anders; nginx staat er één per location toe. |
+| `outpost_location_exists`, `custom_root_location` | *Advanced* heeft al een outpost-location of een eigen `location /`. |
+| `satisfy_any` | Access list op "Satisfy Any": een toegelaten IP-adres zou Authentik overslaan. |
+| `syntax`, `location_invalid` | Onevenwichtige accolades of een location zonder pad in de bestaande config. |
+| `host_disabled`, `nginx_offline` | De host staat uit of is nu al offline in NPM. |
+
+En het waarschuwt (`no_tls`, `tls_not_forced`, `app_has_login` voor een app
+die zelf al via OIDC/SAML aanmeldt, `no_probe` voor een host met enkel
+wildcard-domeinen).
+
+### Uitvoeren, controleren, terugzetten
+
+1. VaultX leest de host opnieuw. Wijzigde hij in NPM sinds het voorbeeld, dan
+   stopt het.
+2. Het spreekt de host aan zonder sessie (controle vooraf). Lukt dat niet, dan
+   stopt het, tenzij je *Controleren* uitvinkt.
+3. Het schrijft de nieuwe config naar NPM. NPM test die met `nginx -t`; bij een
+   fout zet NPM de host offline en zet VaultX meteen de vorige config terug.
+4. Controle achteraf: na beschermen moet een bezoeker zonder sessie een
+   doorverwijzing naar `/outpost.goauthentik.io/start` krijgen. Een 5xx of iets
+   anders betekent terugzetten. Na weghalen mag er geen nieuwe 5xx zijn.
+5. Lukt ook het terugzetten niet, dan staat de vorige config in het journaal,
+   om met de hand terug te zetten.
+
+Per host loopt er maar één wijziging tegelijk, ook met meerdere VaultX-nodes.
+Een wijziging die langer dan 10 minuten op *bezig* blijft staan (bv. VaultX
+herstartte), wordt *onderbroken*; kijk die host dan na in NPM.
+
+Elke poging staat in het journaal **Wijzigingen door VaultX** op de pagina van
+de koppeling (enkel voor beheerders: het bevat de volledige config) en in de
+auditlog als `npm_host.protect` / `npm_host.unprotect`, met uitkomst *success*,
+*failure* of *denied*.
+
+Grenzen:
+
+- Wie in NPM dezelfde host wijzigt tussen stap 1 en 3, wordt overschreven:
+  NPM kent geen voorwaardelijke update. Dat venster duurt zo lang als de
+  controle vooraf, meestal minder dan een seconde.
+- Kan VaultX de host niet aanspreken (enkel wildcard-domeinen, of NPM
+  onbereikbaar op het controleadres), dan kan je uitvoeren zonder controle.
+  VaultX zet dan enkel terug als nginx de config weigert.
+
 ## API
 
 | Methode | Pad | |
@@ -122,12 +223,14 @@ organisatie (`npm.sync`, `npm_connection.*`, `npm_host.updated`, `application.*`
 | POST | `/api/v1/organizations/{org}/npm-connections/{id}/sync` | Nu inlezen (502 als NPM faalt) |
 | GET | `/api/v1/organizations/{org}/npm-connections/{id}/hosts` | Ontdekte hosts |
 | PATCH | `/api/v1/organizations/{org}/npm-connections/{id}/hosts/{host}` | `{"ignored": true}` |
+| GET | `/api/v1/organizations/{org}/npm-connections/{id}/hosts/{host}/protection?action=protect` | Voorbeeld: controles, stappen, config ervoor en erna |
+| POST | `/api/v1/organizations/{org}/npm-connections/{id}/hosts/{host}/protection` | `{"action": "protect", "expected_modified_on": "...", "verify": true}`; antwoordt met de wijziging en haar status (`applied`, `rolled_back`, `rollback_failed`, `refused`) |
+| GET | `/api/v1/organizations/{org}/npm-connections/{id}/changes?host_id=` | Journaal |
 
 Volledige schema's op `/api/docs`.
 
 ## Nog niet
 
-Schrijven naar NPM (forward-auth-config uitrollen, access lists genereren)
-komt later. Een mislukte schrijfactie zet een host in NPM meteen offline (NPM
-verwijdert de config bij een nginx-fout), dus dat vraagt eerst een lokale
-`nginx -t`-controle en automatisch terugzetten.
+- De Authentik-kant (provider, applicatie, outpost) automatisch aanmaken.
+- Access lists genereren, nieuwe proxy hosts aanmaken, meerdere hosts tegelijk
+  beschermen.

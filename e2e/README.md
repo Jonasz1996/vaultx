@@ -40,6 +40,28 @@ cd backend && python ../e2e/npm_e2e.py http://localhost:81 admin@example.com een
 python ../e2e/npm_e2e.py http://localhost:81 admin@example.com een-lang-wachtwoord --seed-only
 ```
 
+`npm_write_e2e.py` test het zetten van Authentik-bescherming via VaultX. Het
+start een nep-outpost (die ook de applicatie achter NPM speelt), een
+nep-Authentik (OIDC) en de VaultX-backend, maakt hosts aan onder
+`.vaultx-write-e2e.test` (HTTP, HTTPS met eigen certificaat, een extra custom
+location, een access list op "Satisfy Any") en controleert via NPM's
+proxypoorten: bescherming zetten (zonder sessie naar Authentik, met sessie de
+app met `X-authentik-*`-headers), weghalen (config weer zoals ervoor), een
+outpost die nginx niet kan resolven en een outpost die 500 geeft (allebei
+teruggezet) en een geweigerde host. NPM moet de app op de Docker-host kunnen
+bereiken (`--docker-host`, standaard `172.17.0.1`).
+
+```bash
+docker run -d --name npm -p 81:81 -p 8080:80 -p 8443:443 \
+  -v npmdata:/data -v npmle:/etc/letsencrypt docker.io/jc21/nginx-proxy-manager:2.16.0
+# (op een machine zonder IPv6: -e DISABLE_IPV6=true)
+cd backend
+python ../e2e/npm_e2e.py http://localhost:81 admin@example.com een-lang-wachtwoord   # maakt de NPM-gebruiker aan
+VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
+  python ../e2e/npm_write_e2e.py http://localhost:81 admin@example.com een-lang-wachtwoord \
+  --proxy 127.0.0.1 --http-port 8080 --https-port 8443
+```
+
 # End-to-end test met de officiële Bitwarden CLI
 
 `bitwarden_e2e.py` start zelf een nep-Authentik (OIDC) en de VaultX-backend met
