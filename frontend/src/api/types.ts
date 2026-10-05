@@ -168,9 +168,54 @@ export interface NpmConnection {
   probe_host: string | null;
   probe_http_port: number;
   probe_https_port: number;
+  authentik_outpost_pk: string | null;
   created_at: string;
   updated_at: string;
   host_count: number;
+}
+
+export interface AuthentikOutpost {
+  pk: string;
+  name: string;
+  managed: string | null;
+  authentik_host: string | null;
+  provider_count: number;
+}
+
+export interface AuthentikOutposts {
+  configured: boolean;
+  api_url: string;
+  outposts: AuthentikOutpost[];
+  error: string | null;
+}
+
+// Wie de Authentik-applicatie mag openen: "all", "organization" of "team:<slug>".
+export type ProtectionAccess = string;
+
+export interface AuthentikState {
+  domain: string;
+  external_host: string;
+  access: string;
+  outpost_pk: string;
+  outpost_name: string | null;
+  outpost_assigned: boolean;
+  provider_pk: number | null;
+  provider_name: string | null;
+  provider_created: boolean;
+  application_slug: string | null;
+  application_name: string | null;
+  application_created: boolean;
+  groups: string[];
+}
+
+export interface AuthentikChange {
+  plan?: { steps: string[]; groups: string[]; access: string };
+  state?: AuthentikState;
+  remove?: AuthentikState;
+  undone?: boolean;
+  undo_error?: string;
+  removed?: boolean;
+  cleanup_error?: string;
 }
 
 export interface SyncResult {
@@ -244,6 +289,13 @@ export interface ProtectionPlan {
   before: HostConfig;
   after: HostConfig;
   probe_url: string | null;
+  authentik: {
+    external_host?: string | null;
+    outpost?: string | null;
+    groups?: string[];
+    access_label?: string;
+    remove?: AuthentikState;
+  } | null;
 }
 
 export interface ProbeResult {
@@ -272,6 +324,7 @@ export interface NpmChange {
   after: Partial<HostConfig> | null;
   probe_before: ProbeResult | null;
   probe_after: ProbeResult | null;
+  authentik: AuthentikChange | null;
   created_at: string;
   finished_at: string | null;
 }

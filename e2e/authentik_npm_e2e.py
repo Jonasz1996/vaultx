@@ -104,6 +104,18 @@ class Authentik:
             trust_env=False,
         )
 
+    def wait_ready(self, flow: str, timeout: float = 600) -> None:
+        """Wacht tot de worker de standaardblueprints toepaste (flows bestaan)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if self.one("/flows/instances/", slug=flow):
+                    return
+            except httpx.HTTPError:
+                pass
+            time.sleep(5)
+        raise SystemExit(f"Authentik is niet klaar: flow {flow} bestaat niet")
+
     def get(self, path: str, **params) -> list[dict]:
         return self.c.get(path, params={**params, "page_size": 100}).raise_for_status().json()["results"]
 
@@ -264,6 +276,7 @@ def main() -> None:
     slug = f"ak-e2e-{int(time.time())}"
     ak = Authentik(args.authentik, args.authentik_token)
     step("Authentik voorbereiden: serviceaccount met beperkte rechten, groep en gebruikers")
+    ak.wait_ready("default-provider-authorization-implicit-consent")
     ak.cleanup()
     sa_token = ak.service_account_token("vaultx-ak-e2e")
     org_group = ak.ensure_group(f"vaultx:{slug}")
