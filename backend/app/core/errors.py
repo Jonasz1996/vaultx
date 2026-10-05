@@ -38,6 +38,13 @@ class InvalidOperationError(VaultXError):
     code = "invalid_operation"
 
 
+class UpstreamError(VaultXError):
+    """Een externe dienst (bv. Nginx Proxy Manager) faalde of weigerde."""
+
+    status_code = 502
+    code = "upstream_error"
+
+
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(VaultXError)
     async def _handle(request: Request, exc: VaultXError) -> JSONResponse:

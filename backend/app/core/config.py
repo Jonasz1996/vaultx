@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     session_idle_minutes: int = 120
     cookie_secure: bool = True
 
+    # NPM-connector
+    # Elke zoveel minuten alle actieve NPM-koppelingen synchroniseren. 0 = enkel handmatig.
+    npm_sync_interval_minutes: int = Field(15, ge=0)
+    npm_http_timeout_seconds: float = 15.0
+
     @field_validator("oidc_admin_groups", mode="before")
     @classmethod
     def _split_groups(cls, value: object) -> object:
