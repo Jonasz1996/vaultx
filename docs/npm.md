@@ -11,6 +11,10 @@ config terug.
 Sinds fase 4 kan VaultX daarbij ook de **Authentik-kant** zelf aanmaken
 (provider, applicatie, toegang, outpost; sectie 6), zodat beschermen één stap is.
 
+Sinds fase 6 kan VaultX ook een **nieuwe app publiceren**: de proxy host zelf
+aanmaken, beschermen met Authentik en in de catalogus zetten, en ze weer
+depubliceren. Zie [publish.md](publish.md).
+
 Getest tegen NPM 2.16.0 en Authentik 2026.8.3 (CI start bij elke push een
 echte NPM en een echte Authentik, zie `e2e/npm_e2e.py`, `e2e/npm_write_e2e.py`
 en `e2e/authentik_npm_e2e.py`).
@@ -23,7 +27,8 @@ Maak in NPM onder *Users* een apart account aan, bijvoorbeeld
 | Recht | Waarde | Waarom |
 | --- | --- | --- |
 | Visibility | **All Items** | Met "Created Items Only" ziet VaultX enkel hosts die dit account zelf maakte |
-| Proxy Hosts | **View Only**, of **Manage** als VaultX Authentik-bescherming mag zetten | |
+| Proxy Hosts | **View Only**, of **Manage** als VaultX Authentik-bescherming mag zetten of apps mag publiceren | |
+| Certificates | **View Only** om bij "App publiceren" een certificaat te kiezen | VaultX geeft de sleutels nooit door |
 | Rest | Hidden | NPM geeft de access list (naam, "Satisfy Any") mee bij de host |
 
 Zo getest op NPM 2.16.0. Met *View Only* weigert NPM elke schrijfpoging, ook
@@ -326,11 +331,13 @@ Authentik). Het voorbeeld en het uitvoeren nemen `access`: `organization`
 (standaard), `team:<slug>` of `all`; het voorbeeld geeft in `authentik` wat
 VaultX in Authentik doet, het journaal in `authentik` wat het deed.
 
+Fase 6 (app publiceren en depubliceren): zie de API-tabel in
+[publish.md](publish.md).
+
 Volledige schema's op `/api/docs`.
 
 ## Nog niet
 
-- Access lists genereren, nieuwe proxy hosts aanmaken, meerdere hosts tegelijk
-  beschermen.
+- Access lists genereren, meerdere hosts tegelijk beschermen.
 - De toegang van een al beschermde host wijzigen (nu: weghalen en opnieuw
   beschermen), en OIDC-providers in plaats van forward auth aanmaken.
