@@ -24,7 +24,9 @@ build slaagt; je kan die waarschuwing negeren of Node 22 via NodeSource installe
 
 ```bash
 runuser -u postgres -- createuser vaultx --pwprompt
-runuser -u postgres -- createdb vaultx --owner vaultx
+# Expliciet UTF8: Proxmox-templates hebben geen locale, waardoor PostgreSQL anders
+# SQL_ASCII kiest en de migratie faalt ("cannot use a string pattern on a bytes-like object").
+runuser -u postgres -- createdb vaultx --owner vaultx --encoding UTF8 --locale C.UTF-8 --template template0
 ```
 
 ## 3. Code en Python-omgeving
