@@ -126,3 +126,23 @@ cd backend
 VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
   python ../e2e/autologin_e2e.py --authentik http://localhost:9000 --authentik-token <beheertoken> --browser
 ```
+
+# End-to-end test fase 6: app publiceren
+
+`publish_e2e.py` gebruikt dezelfde opstelling als `authentik_npm_e2e.py`, maar
+NPM moet ook poort 443 aanbieden. Het zet in NPM enkel een self-signed
+wildcardcertificaat `*.vaultx-pub-e2e.test`; de hosts maakt VaultX zelf aan.
+Het test: certificaten zonder sleutels opvragen, een app publiceren over https
+met Authentik, thema en headers (met `--browser`: alice komt binnen en ziet het
+thema, eve wordt geweigerd), een app zonder Authentik over http (thema en
+headers in het antwoord), hetzelfde domein opnieuw (geweigerd), een outpost die
+niet antwoordt (nieuwe host en Authentik-objecten weer weg) en depubliceren.
+
+```bash
+docker run -d --name npm -p 81:81 -p 80:80 -p 443:443 \
+  -v npmdata:/data -v npmle:/etc/letsencrypt docker.io/jc21/nginx-proxy-manager:2.16.0
+cd backend
+VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
+  python ../e2e/publish_e2e.py http://localhost:81 admin@example.com een-lang-wachtwoord \
+  --authentik http://localhost:9000 --authentik-token <beheertoken> --browser
+```

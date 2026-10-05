@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.common import ORMModel
 from app.services.npm_protect import normalize_outpost_url
+from app.services.npm_publish import THEME_URL_RE, valid_theme_template
 
 AuthMethodLiteral = Literal["forward_auth", "oidc", "saml", "header", "access_list", "app", "none", "unknown"]
 # protected: aanmelding via Authentik (forward auth, OIDC, SAML, headers)
@@ -54,6 +55,26 @@ def _check_probe_host(value: str | None) -> str | None:
     return value
 
 
+def _check_theme_template(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    value = value.strip()
+    if not valid_theme_template(value):
+        raise ValueError(
+            "Geef een http(s)-URL op, met {app} voor de naam van de app, bv. https://css.example.be/{app}.css"
+        )
+    return value
+
+
+def _check_theme_url(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    value = value.strip()
+    if not THEME_URL_RE.fullmatch(value):
+        raise ValueError("Het CSS-thema moet een gewone http(s)-URL zijn, zonder spaties of aanhalingstekens")
+    return value
+
+
 class Warning_(BaseModel):
     code: str
     message: str
@@ -92,8 +113,15 @@ class NpmConnectionCreate(BaseModel):
         max_length=64,
         description="Outpost in Authentik waarop VaultX zelf providers zet; leeg = niets aanmaken",
     )
+    theme_css_template: str | None = Field(
+        None,
+        max_length=2048,
+        description="Standaard CSS-thema bij publiceren; {app} wordt de naam van de app",
+        examples=["https://css.example.be/{app}.css"],
+    )
 
     _url = field_validator("base_url")(_check_url)
+    _theme = field_validator("theme_css_template")(_check_theme_template)
     _outpost = field_validator("authentik_outpost_url")(_check_outpost)
     _outpost_pk = field_validator("authentik_outpost_pk")(_check_outpost_pk)
     _probe = field_validator("probe_host")(_check_probe_host)
@@ -113,8 +141,14 @@ class NpmConnectionUpdate(BaseModel):
     probe_http_port: int | None = Field(None, ge=1, le=65535)
     probe_https_port: int | None = Field(None, ge=1, le=65535)
     authentik_outpost_pk: str | None = Field(None, max_length=64)
+    theme_css_template: str | None = Field(None, max_length=2048)
 
     _url = field_validator("base_url")(_check_url)
+
+    @field_validator("theme_css_template")
+    @classmethod
+    def _theme(cls, v: str | None) -> str | None:
+        return v if v == "" else _check_theme_template(v)
 
     @field_validator("authentik_outpost_pk")
     @classmethod
@@ -150,6 +184,7 @@ class NpmConnectionOut(ORMModel):
     probe_http_port: int
     probe_https_port: int
     authentik_outpost_pk: str | None
+    theme_css_template: str | None = None
     created_at: datetime
     updated_at: datetime
     host_count: int = 0
@@ -190,6 +225,7 @@ class DiscoveredHostOut(ORMModel):
     labels: dict[str, str]
     warnings: list[Warning_]
     vaultx_managed: bool
+    vaultx_published: bool = False
     ignored: bool
     first_seen_at: datetime
     last_seen_at: datetime
@@ -256,7 +292,7 @@ class NpmChangeOut(ORMModel):
     host_id: UUID | None
     npm_id: int
     domain: str
-    action: ProtectionAction
+    action: Literal["protect", "unprotect", "publish", "unpublish"]
     status: Literal["running", "applied", "rolled_back", "rollback_failed", "refused", "interrupted"]
     verified: bool
     actor_label: str | None
@@ -269,6 +305,67 @@ class NpmChangeOut(ORMModel):
     authentik: dict[str, Any] | None
     created_at: datetime
     finished_at: datetime | None
+
+
+# ---------------------------------------------------------------- app publiceren (fase 6)
+
+PUBLISH_DOMAIN_RE = r"^[A-Za-z0-9.-]{1,253}$"
+
+
+class PublishRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255, description="Naam in de catalogus en in Authentik")
+    domain: str = Field(pattern=PUBLISH_DOMAIN_RE, description="Eén domeinnaam, bv. app.example.be")
+    forward_scheme: Literal["http", "https"] = "http"
+    forward_host: str = Field(min_length=1, max_length=255, description="Hostnaam of IP van de app")
+    forward_port: int = Field(ge=1, le=65535)
+    certificate_id: int = Field(0, ge=0, description="Certificaat in NPM; 0 = geen (enkel http)")
+    ssl_forced: bool = Field(True, description="Met certificaat: http omleiden naar https, en HSTS")
+    websockets: bool = True
+    block_exploits: bool = True
+    security_headers: bool = Field(True, description="X-Frame-Options, nosniff, Referrer-Policy, CSP ...")
+    theme_css_url: str | None = Field(None, max_length=2048, description="CSS-thema dat in elke pagina komt")
+    description: str | None = Field(None, max_length=200)
+    protect: bool = Field(True, description="Beschermen met Authentik (forward auth)")
+    access: str = Field(
+        "organization",
+        pattern=ACCESS_PATTERN,
+        description="Toegang tot de Authentik-applicatie: all, organization of team:<slug>",
+    )
+
+    _theme = field_validator("theme_css_url")(_check_theme_url)
+
+
+class PublishApply(PublishRequest):
+    verify: bool = Field(True, description="Host achteraf aanspreken; bij een fout alles terugdraaien")
+
+
+class CertificateOut(BaseModel):
+    id: int
+    nice_name: str | None = None
+    provider: str | None = None
+    domain_names: list[str] = Field(default_factory=list)
+    expires_on: str | None = None
+
+
+class PublishPlanOut(BaseModel):
+    domain: str
+    can_apply: bool
+    checks: list[CheckOut]
+    steps: list[str]
+    host: dict[str, Any] = Field(description="De host zoals VaultX hem in NPM aanmaakt")
+    certificate: CertificateOut | None = None
+    probe_url: str | None = None
+    authentik: dict[str, Any] | None = None
+
+
+class UnpublishPlanOut(BaseModel):
+    domain: str
+    npm_id: int
+    can_apply: bool
+    checks: list[CheckOut]
+    steps: list[str]
+    before: dict[str, Any]
+    authentik: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------- catalogus

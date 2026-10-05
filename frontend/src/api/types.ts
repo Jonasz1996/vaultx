@@ -169,6 +169,7 @@ export interface NpmConnection {
   probe_http_port: number;
   probe_https_port: number;
   authentik_outpost_pk: string | null;
+  theme_css_template: string | null;
   created_at: string;
   updated_at: string;
   host_count: number;
@@ -249,6 +250,7 @@ export interface DiscoveredHost {
   warnings: DetectionWarning[];
   ignored: boolean;
   vaultx_managed: boolean;
+  vaultx_published: boolean;
   first_seen_at: string;
   last_seen_at: string;
   removed_at: string | null;
@@ -314,7 +316,7 @@ export interface NpmChange {
   host_id: string | null;
   npm_id: number;
   domain: string;
-  action: ProtectionAction;
+  action: ProtectionAction | "publish" | "unpublish";
   status: NpmChangeStatus;
   verified: boolean;
   actor_label: string | null;
@@ -443,4 +445,52 @@ export interface VaultStatus {
   trash_count: number;
   folder_count: number;
   devices: VaultDevice[];
+}
+
+// ---------------------------------------------------------------- app publiceren (fase 6)
+
+export interface NpmCertificate {
+  id: number;
+  nice_name: string | null;
+  provider: string | null;
+  domain_names: string[];
+  expires_on: string | null;
+}
+
+export interface PublishRequest {
+  name: string;
+  domain: string;
+  forward_scheme: "http" | "https";
+  forward_host: string;
+  forward_port: number;
+  certificate_id: number;
+  ssl_forced: boolean;
+  websockets: boolean;
+  block_exploits: boolean;
+  security_headers: boolean;
+  theme_css_url: string | null;
+  description: string | null;
+  protect: boolean;
+  access: string;
+}
+
+export interface PublishPlan {
+  domain: string;
+  can_apply: boolean;
+  checks: ProtectionCheck[];
+  steps: string[];
+  host: Partial<HostConfig> & Record<string, unknown>;
+  certificate: NpmCertificate | null;
+  probe_url: string | null;
+  authentik: { groups?: string[]; access_label?: string; outpost?: string | null } | null;
+}
+
+export interface UnpublishPlan {
+  domain: string;
+  npm_id: number;
+  can_apply: boolean;
+  checks: ProtectionCheck[];
+  steps: string[];
+  before: Partial<HostConfig> & Record<string, unknown>;
+  authentik: { remove?: AuthentikState } | null;
 }

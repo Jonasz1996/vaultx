@@ -144,6 +144,7 @@ export interface ConnectionValues {
   probe_http_port: number;
   probe_https_port: number;
   authentik_outpost_pk: string;
+  theme_css_template: string;
 }
 
 // Fase 4: kies de outpost waarop VaultX zelf providers zet. Leeg = VaultX maakt niets aan in Authentik.
@@ -223,6 +224,7 @@ export function ConnectionForm({
   const [httpPort, setHttpPort] = useState(initial?.probe_http_port ?? 80);
   const [httpsPort, setHttpsPort] = useState(initial?.probe_https_port ?? 443);
   const [outpostPk, setOutpostPk] = useState(initial?.authentik_outpost_pk ?? "");
+  const [theme, setTheme] = useState(initial?.theme_css_template ?? "");
   const submit = (e: FormEvent) => {
     e.preventDefault();
     onSubmit({
@@ -239,6 +241,7 @@ export function ConnectionForm({
       probe_http_port: httpPort,
       probe_https_port: httpsPort,
       authentik_outpost_pk: outpostPk,
+      theme_css_template: theme.trim(),
     });
   };
   return (
@@ -338,6 +341,18 @@ export function ConnectionForm({
           Hier spreekt VaultX een host aan voor en na een wijziging, met de domeinnaam als Host-header. Leeg =
           de host van de beheer-URL.
         </small>
+        <label className="field">
+          <span>CSS-thema bij publiceren</span>
+          <input
+            placeholder="https://css.example.be/{app}.css"
+            value={theme}
+            onChange={(e) => setTheme(e.target.value)}
+          />
+          <small className="muted">
+            Optioneel. Bij "App publiceren" wordt <code>{"{app}"}</code> de naam van de app (bv. proxmox-ve); het
+            thema blijft per app aan te passen.
+          </small>
+        </label>
       </fieldset>
       <ErrorBox error={error} />
       <div className="form-actions">

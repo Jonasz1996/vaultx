@@ -107,6 +107,7 @@ async def app(fake_npm: FakeNPM, fake_authentik: FakeAuthentik):
         conn.base_url, verify_tls=conn.verify_tls, transport=fake_npm.transport
     )
     application.state.npm_prober = fake_npm.probe
+    application.state.upstream_checker = fake_npm.check_upstream
     application.state.authentik_client_factory = lambda: AuthentikClient(
         "http://authentik.test", AUTHENTIK_TOKEN, transport=fake_authentik.transport
     )
