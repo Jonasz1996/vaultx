@@ -95,13 +95,25 @@ def make_prober(timeout: float = 10.0) -> Prober:
     return probe
 
 
-def judge(action: Action, before: ProbeResult | None, after: ProbeResult) -> str | None:
-    """None als het resultaat in orde is, anders de reden om terug te zetten."""
+def judge(
+    action: Action, before: ProbeResult | None, after: ProbeResult, *, provider_by_vaultx: bool = False
+) -> str | None:
+    """None als het resultaat in orde is, anders de reden om terug te zetten.
+
+    provider_by_vaultx: VaultX zette net zelf de provider op de outpost (fase 4); een 5xx wijst dan
+    niet op een ontbrekende provider.
+    """
     if after.error:
         return f"De host is na de wijziging niet meer bereikbaar: {after.error}."
     if action == "protect":
         if after.authentik_redirect:
             return None
+        if after.server_error and provider_by_vaultx:
+            return (
+                f"De host geeft {after.status} in plaats van door te verwijzen naar Authentik. "
+                "Waarschijnlijk bereikt nginx in NPM de outpost niet (controleer de outpost-URL), of laadde "
+                "de outpost de nieuwe provider niet op tijd."
+            )
         if after.server_error:
             return (
                 f"De host geeft {after.status} in plaats van door te verwijzen naar Authentik. "

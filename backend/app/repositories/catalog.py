@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import selectinload
 
-from app.models import Application, DiscoveredHost, NpmChange, NpmConnection
+from app.models import Application, AuthentikProtection, DiscoveredHost, NpmChange, NpmConnection
 from app.repositories.base import Repository
 
 
@@ -128,5 +128,22 @@ class NpmChangeRepository(Repository[NpmChange]):
                 NpmChange.status == "running",
                 NpmChange.created_at < before,
             )
+        )
+        return list(rows)
+
+
+class AuthentikProtectionRepository(Repository[AuthentikProtection]):
+    model = AuthentikProtection
+
+    async def for_host(self, connection_id: UUID, npm_id: int) -> AuthentikProtection | None:
+        return await self.db.scalar(
+            select(AuthentikProtection).where(
+                AuthentikProtection.connection_id == connection_id, AuthentikProtection.npm_id == npm_id
+            )
+        )
+
+    async def for_connection(self, connection_id: UUID) -> list[AuthentikProtection]:
+        rows = await self.db.scalars(
+            select(AuthentikProtection).where(AuthentikProtection.connection_id == connection_id)
         )
         return list(rows)

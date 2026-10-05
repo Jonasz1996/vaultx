@@ -36,6 +36,15 @@ def _check_outpost(value: str | None) -> str | None:
     return normalize_outpost_url(value)
 
 
+def _check_outpost_pk(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        return str(UUID(value.strip()))
+    except ValueError as exc:
+        raise ValueError("Ongeldige outpost (verwacht de UUID van de outpost in Authentik)") from exc
+
+
 def _check_probe_host(value: str | None) -> str | None:
     if value is None or not value.strip():
         return None
@@ -78,9 +87,15 @@ class NpmConnectionCreate(BaseModel):
     )
     probe_http_port: int = Field(80, ge=1, le=65535)
     probe_https_port: int = Field(443, ge=1, le=65535)
+    authentik_outpost_pk: str | None = Field(
+        None,
+        max_length=64,
+        description="Outpost in Authentik waarop VaultX zelf providers zet; leeg = niets aanmaken",
+    )
 
     _url = field_validator("base_url")(_check_url)
     _outpost = field_validator("authentik_outpost_url")(_check_outpost)
+    _outpost_pk = field_validator("authentik_outpost_pk")(_check_outpost_pk)
     _probe = field_validator("probe_host")(_check_probe_host)
 
 
@@ -97,8 +112,14 @@ class NpmConnectionUpdate(BaseModel):
     probe_host: str | None = Field(None, max_length=255)
     probe_http_port: int | None = Field(None, ge=1, le=65535)
     probe_https_port: int | None = Field(None, ge=1, le=65535)
+    authentik_outpost_pk: str | None = Field(None, max_length=64)
 
     _url = field_validator("base_url")(_check_url)
+
+    @field_validator("authentik_outpost_pk")
+    @classmethod
+    def _outpost_pk(cls, v: str | None) -> str | None:
+        return v if v == "" else _check_outpost_pk(v)
 
     @field_validator("authentik_outpost_url")
     @classmethod
@@ -128,6 +149,7 @@ class NpmConnectionOut(ORMModel):
     probe_host: str | None
     probe_http_port: int
     probe_https_port: int
+    authentik_outpost_pk: str | None
     created_at: datetime
     updated_at: datetime
     host_count: int = 0
@@ -182,6 +204,8 @@ class DiscoveredHostUpdate(BaseModel):
 # ---------------------------------------------------------------- schrijven naar NPM (fase 3)
 
 ProtectionAction = Literal["protect", "unprotect"]
+# Wie de applicatie na de Authentik-aanmelding mag openen (fase 4).
+ACCESS_PATTERN = r"^(all|organization|team:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$"
 
 
 class CheckOut(BaseModel):
@@ -210,12 +234,20 @@ class ProtectionPlanOut(BaseModel):
     before: HostConfigOut
     after: HostConfigOut
     probe_url: str | None = Field(description="Waar VaultX de host achteraf aanspreekt")
+    authentik: dict[str, Any] | None = Field(
+        None, description="Fase 4: wat VaultX in Authentik aanmaakt of opruimt; null = niets"
+    )
 
 
 class ProtectionApply(BaseModel):
     action: ProtectionAction
     expected_modified_on: str | None = None
     verify: bool = Field(True, description="Host vooraf en achteraf aanspreken; bij een fout terugzetten")
+    access: str = Field(
+        "organization",
+        pattern=ACCESS_PATTERN,
+        description="Toegang tot de Authentik-applicatie: all, organization of team:<slug>",
+    )
 
 
 class NpmChangeOut(ORMModel):
@@ -234,6 +266,7 @@ class NpmChangeOut(ORMModel):
     after: dict[str, Any] | None
     probe_before: dict[str, Any] | None
     probe_after: dict[str, Any] | None
+    authentik: dict[str, Any] | None
     created_at: datetime
     finished_at: datetime | None
 
@@ -297,3 +330,21 @@ class ApplicationOut(BaseModel):
     warning_count: int
     created_at: datetime
     updated_at: datetime
+
+
+# ---------------------------------------------------------------- Authentik (fase 4)
+
+
+class AuthentikOutpostOut(BaseModel):
+    pk: str
+    name: str
+    managed: str | None = None
+    authentik_host: str | None = None
+    provider_count: int = 0
+
+
+class AuthentikOutpostsOut(BaseModel):
+    configured: bool = Field(description="Staat de Authentik-API ingesteld op de VaultX-server?")
+    api_url: str
+    outposts: list[AuthentikOutpostOut] = Field(default_factory=list)
+    error: str | None = None
