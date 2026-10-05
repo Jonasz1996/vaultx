@@ -156,6 +156,7 @@ class ApplicationHostOut(ORMModel):
     forward: str
     enabled: bool
     nginx_online: bool
+    ssl: bool
     forward_auth: bool
     warnings: list[Warning_]
     removed_at: datetime | None

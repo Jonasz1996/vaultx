@@ -45,6 +45,7 @@ def app_out(a: Application) -> ApplicationOut:
                 forward=f"{h.forward_scheme}://{h.forward_host}:{h.forward_port}",
                 enabled=h.enabled,
                 nginx_online=h.nginx_online,
+                ssl=h.ssl,
                 forward_auth=h.forward_auth,
                 warnings=h.warnings,
                 removed_at=h.removed_at,

@@ -25,3 +25,25 @@ export const roleLabels: Record<string, string> = {
   member: "Lid",
   maintainer: "Maintainer",
 };
+
+export const authLabels: Record<string, string> = {
+  forward_auth: "Authentik forward auth",
+  oidc: "OIDC",
+  saml: "SAML",
+  header: "Proxy-headers",
+  access_list: "NPM access list",
+  app: "Eigen login",
+  none: "Geen",
+  unknown: "Onbekend",
+};
+
+type Tone = "neutral" | "good" | "warn" | "bad" | "info";
+
+export const statusInfo: Record<string, { label: string; tone: Tone; hint: string }> = {
+  protected: { label: "Beschermd", tone: "good", hint: "Aanmelden verloopt via Authentik" },
+  restricted: { label: "Beperkt", tone: "info", hint: "Afgeschermd, maar niet via Authentik" },
+  unprotected: { label: "Open", tone: "bad", hint: "Bewust zonder aanmelding" },
+  unknown: { label: "Onbekend", tone: "warn", hint: "Aanmelding nog niet bepaald: zet een label of vul het in" },
+  offline: { label: "Offline", tone: "bad", hint: "Host uitgeschakeld of nginx-fout in NPM" },
+  removed: { label: "Verdwenen", tone: "neutral", hint: "Host staat niet meer in NPM" },
+};

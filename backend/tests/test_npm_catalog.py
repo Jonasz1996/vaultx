@@ -235,6 +235,8 @@ async def test_manual_application_crud(admin):
     assert (await admin.post_json(base, {"name": "x", "url": "ftp://x"})).status_code == 422
     r = await admin.patch_json(f"{base}/{app['id']}", {"auth_method": "none"})
     assert r.json()["status"] == "unprotected"
+    hist = (await admin.get("/api/v1/audit", params={"target_id": app["id"]})).json()["items"]
+    assert [h["action"] for h in hist] == ["application.updated", "application.created"]
     assert (await admin.delete_(f"{base}/{app['id']}")).status_code == 204
     assert (await admin.get(f"{base}/{app['id']}")).status_code == 404
 

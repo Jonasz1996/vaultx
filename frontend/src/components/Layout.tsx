@@ -8,6 +8,8 @@ const nav = [
   { to: "/users", label: "Gebruikers", adminOnly: true },
   { to: "/organizations", label: "Organisaties" },
   { to: "/teams", label: "Teams" },
+  { to: "/catalog", label: "Catalogus" },
+  { to: "/npm", label: "NPM" },
   { to: "/audit", label: "Audit" },
 ];
 

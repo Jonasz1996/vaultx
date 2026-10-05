@@ -31,6 +31,7 @@ class AuditRepository(Repository[AuditLog]):
         instance_chain: bool | None = None,
         organization_id: UUID | None = None,
         actor_user_id: UUID | None = None,
+        target_id: str | None = None,
         action_prefix: str | None = None,
         outcome: str | None = None,
         since: datetime | None = None,
@@ -47,6 +48,8 @@ class AuditRepository(Repository[AuditLog]):
             stmt = stmt.where(AuditLog.organization_id == organization_id)
         if actor_user_id is not None:
             stmt = stmt.where(AuditLog.actor_user_id == actor_user_id)
+        if target_id is not None:
+            stmt = stmt.where(AuditLog.target_id == target_id)
         if action_prefix:
             stmt = stmt.where(AuditLog.action.startswith(action_prefix, autoescape=True))
         if outcome:
