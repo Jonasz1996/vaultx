@@ -1,19 +1,24 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from app.api.deps import CurrentPrincipal, DbSession, SettingsDep
 from app.api.v1.catalog import host_out
 from app.schemas.catalog import (
     DiscoveredHostOut,
     DiscoveredHostUpdate,
+    NpmChangeOut,
     NpmConnectionCreate,
     NpmConnectionOut,
     NpmConnectionUpdate,
+    ProtectionAction,
+    ProtectionApply,
+    ProtectionPlanOut,
     SyncResultOut,
 )
 from app.services.npm import NpmService
+from app.services.npm_write import NpmWriteService
 
 router = APIRouter(prefix="/organizations/{org_id}/npm-connections", tags=["npm"])
 
@@ -24,6 +29,16 @@ def npm_service(request: Request, db: DbSession, settings: SettingsDep) -> NpmSe
 
 
 NpmDep = Annotated[NpmService, Depends(npm_service)]
+
+
+def npm_write_service(request: Request, db: DbSession, settings: SettingsDep) -> NpmWriteService:
+    state = request.app.state
+    return NpmWriteService(
+        db, settings, getattr(state, "npm_client_factory", None), getattr(state, "npm_prober", None)
+    )
+
+
+NpmWriteDep = Annotated[NpmWriteService, Depends(npm_write_service)]
 
 
 async def _out(svc: NpmService, conn) -> NpmConnectionOut:
@@ -87,3 +102,73 @@ async def update_host(
     org_id: UUID, conn_id: UUID, host_id: UUID, data: DiscoveredHostUpdate, p: CurrentPrincipal, svc: NpmDep
 ):
     return host_out(await svc.set_host_ignored(p, org_id, conn_id, host_id, data.ignored))
+
+
+# ---------------------------------------------------------------- Authentik-bescherming (fase 3)
+
+
+@router.get(
+    "/{conn_id}/hosts/{host_id}/protection",
+    response_model=ProtectionPlanOut,
+    summary="Voorbeeld: wat VaultX in NPM zou wijzigen, en of dat veilig kan",
+    responses={502: {"description": "NPM onbereikbaar of weigert de aanmelding"}},
+)
+async def preview_protection(
+    org_id: UUID,
+    conn_id: UUID,
+    host_id: UUID,
+    p: CurrentPrincipal,
+    svc: NpmWriteDep,
+    action: Annotated[ProtectionAction, Query()] = "protect",
+):
+    view = await svc.preview(p, org_id, conn_id, host_id, action)
+    plan = view.plan
+    return ProtectionPlanOut(
+        action=plan.action,
+        npm_id=plan.npm_id,
+        domain=view.domain,
+        modified_on=plan.modified_on,
+        can_apply=view.can_apply,
+        checks=[{"code": c.code, "level": c.level, "message": c.message} for c in plan.checks],
+        steps=plan.steps,
+        before=plan.before,
+        after=plan.after,
+        probe_url=view.probe.url if view.probe else None,
+    )
+
+
+@router.post(
+    "/{conn_id}/hosts/{host_id}/protection",
+    response_model=NpmChangeOut,
+    summary="Authentik-bescherming zetten of weghalen, met controle en automatisch terugzetten",
+    description=(
+        "Geeft altijd het journaal van de wijziging terug. `status` zegt wat er gebeurde: `applied`, "
+        "`rolled_back` (controle faalde, oude config terug), `rollback_failed` (handwerk nodig) of "
+        "`refused` (niets gewijzigd)."
+    ),
+)
+async def apply_protection(
+    org_id: UUID, conn_id: UUID, host_id: UUID, data: ProtectionApply, p: CurrentPrincipal, svc: NpmWriteDep
+):
+    return await svc.apply(
+        p,
+        org_id,
+        conn_id,
+        host_id,
+        data.action,
+        expected_modified_on=data.expected_modified_on,
+        verify=data.verify,
+    )
+
+
+@router.get(
+    "/{conn_id}/changes", response_model=list[NpmChangeOut], summary="Journaal van wijzigingen in NPM"
+)
+async def list_changes(
+    org_id: UUID,
+    conn_id: UUID,
+    p: CurrentPrincipal,
+    svc: NpmWriteDep,
+    host_id: UUID | None = None,
+):
+    return await svc.list_changes(p, org_id, conn_id, host_id)
