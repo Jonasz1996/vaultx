@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     npm_sync_interval_minutes: int = Field(15, ge=0)
     npm_http_timeout_seconds: float = 15.0
 
+    # Kluis voor Bitwarden-clients (fase 2)
+    vault_enabled: bool = True
+    # Levensduur van een access token voor Bitwarden-clients.
+    vault_access_token_minutes: int = Field(60, ge=5, le=24 * 60)
+    # Een apparaat dat zo lang niets van zich liet horen, moet opnieuw inloggen.
+    vault_device_idle_days: int = Field(30, ge=1)
+    # Na zoveel foute master passwords na elkaar wordt het account tijdelijk vergrendeld.
+    vault_max_failed_logins: int = Field(10, ge=1)
+    vault_lockout_minutes: int = Field(15, ge=1)
+
     @field_validator("oidc_admin_groups", mode="before")
     @classmethod
     def _split_groups(cls, value: object) -> object:
