@@ -390,3 +390,34 @@ details.callout summary { color: inherit; }
 .note-path { flex-wrap: wrap; row-gap: 4px; }
 .note-folder { width: 200px; min-width: 80px; flex: 0 1 200px; }
 .seg button { white-space: nowrap; }
+
+/* Notities: code, wiskunde, diagrammen en voetnoten */
+.md .code-block { position: relative; margin: 8px 0; }
+.md .code-block pre { margin: 0; }
+.md .code-lang { position: absolute; top: 5px; right: 76px; font-size: 11px; color: var(--muted); opacity: 0; }
+.md .code-copy { position: absolute; top: 4px; right: 4px; font: inherit; font-size: 11.5px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 5px; padding: 1px 7px; cursor: pointer; opacity: 0; }
+.md .code-block:hover .code-copy, .md .code-block:hover .code-lang, .md .code-copy:focus { opacity: 1; }
+.hljs-comment, .hljs-quote { color: #6a737d; font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-built_in { color: #c4322b; }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute { color: #1d7a43; }
+.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-variable, .hljs-template-variable { color: #8a5a00; }
+.hljs-title, .hljs-section, .hljs-name, .hljs-type, .hljs-attr, .hljs-meta { color: #2848b8; }
+.hljs-deletion { color: #b42318; }
+@media (prefers-color-scheme: dark) {
+  .hljs-comment, .hljs-quote { color: #8b949e; }
+  .hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-built_in { color: #ff7b72; }
+  .hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute { color: #7ee2a8; }
+  .hljs-number, .hljs-symbol, .hljs-bullet, .hljs-variable, .hljs-template-variable { color: #f1c35b; }
+  .hljs-title, .hljs-section, .hljs-name, .hljs-type, .hljs-attr, .hljs-meta { color: #9db4ff; }
+  .hljs-deletion { color: #f59a92; }
+}
+.md .math-block { overflow-x: auto; margin: 10px 0; text-align: center; }
+.md math { font-size: 1.1em; }
+.md .diagram { margin: 10px 0; overflow-x: auto; }
+.md .diagram img { max-width: 100%; height: auto; }
+.md .diagram-loading { color: var(--muted); font-size: 12.5px; }
+.md .diagram-error .small { color: var(--bad-fg); }
+.md .footnotes { border-top: 1px solid var(--border); margin-top: 20px; font-size: 13px; color: var(--muted); }
+.md .footnotes ol { padding-left: 20px; }
+.md sup a, .md .footnotes a { text-decoration: none; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

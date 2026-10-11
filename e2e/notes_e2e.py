@@ -162,6 +162,15 @@ def main() -> None:
             page = ctx.new_page()
             errors: list[str] = []
             page.on("pageerror", lambda e: errors.append(str(e)))
+            # De preview draait met de CSP van productie; een geweigerde bron is een fout. Uitzondering:
+            # Mermaid zet bij het tekenen inline stijlen op een tijdelijk element (geweigerd, zonder
+            # gevolg: het diagram zelf wordt een afbeelding met eigen stijlen).
+            page.on(
+                "console",
+                lambda m: errors.append(f"{m.text} @ {m.location}")
+                if "Content Security Policy" in m.text and "apply inline style" not in m.text
+                else None,
+            )
             page.on("dialog", lambda d: d.accept())
 
             step("Inloggen via (nep-)Authentik als beheerder")
@@ -316,6 +325,28 @@ def main() -> None:
             expect(page.locator(".attachments .attachment")).to_have_count(3)
             shot(page, "07-bijlagen")
             page.locator(".side-tabs").get_by_role("button", name="Bestanden").click()
+
+            step("Opmaak: Mermaid, wiskunde, voetnoten en code-kleuren")
+            editor.fill(
+                editor.input_value()
+                + "\n\nEnergie: $E = mc^2$ en kost $5 of $10.[^bron]\n\n"
+                + "$$\n\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}\n$$\n\n"
+                + "```mermaid\ngraph LR\n  NPM --> Authentik --> VaultX\n```\n\n"
+                + "```bash\nsudo systemctl restart vaultx\n```\n\n"
+                + "[^bron]: Einstein, 1905.\n"
+            )
+            saved(page)
+            preview = page.locator(".preview .md")
+            expect(preview.locator(".diagram img")).to_have_count(1, timeout=20_000)
+            assert preview.locator(".diagram img").get_attribute("src").startswith("data:image/svg+xml;base64,")
+            expect(preview.locator(".diagram img")).to_have_js_property("complete", True)
+            assert preview.locator(".diagram img").evaluate("i => i.naturalWidth") > 50
+            expect(preview.locator("math")).to_have_count(2)
+            expect(preview).to_contain_text("kost $5 of $10")
+            expect(preview.locator(".footnotes li")).to_have_count(1)
+            expect(preview.locator(".code-block .hljs-built_in, .code-block .hljs-keyword").first).to_be_visible()
+            preview.locator(".code-block").last.hover()
+            shot(page, "08-opmaak")
 
             step("Versiegeschiedenis")
             open_note(page, "Proxmox herstel")

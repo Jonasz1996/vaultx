@@ -11,7 +11,7 @@ is aangemeld, komt meteen in de app), **fase 6** (app publiceren) en **fase 7**
 
 **Fase 7**
 
-- "Notities" in het menu: Markdown-notities met [[wikilinks]], backlinks, niet-gelinkte vermeldingen, #tags (ook genest), eigenschappen (frontmatter), callouts, taken, ingesloten notities, een grafiek, dagnotities, sjablonen, bladwijzers, snelkiezer (Ctrl+O) en zoeken
+- "Notities" in het menu: Markdown-notities met [[wikilinks]], backlinks, niet-gelinkte vermeldingen, #tags (ook genest), eigenschappen (frontmatter), callouts, taken, voetnoten, wiskunde, Mermaid-diagrammen, code-kleuren, ingesloten notities, een grafiek, dagnotities, sjablonen, bladwijzers, snelkiezer (Ctrl+O) en zoeken
 - End-to-end versleuteld met de sleutel van je kluis: de browser ontgrendelt met je master password, de server ziet enkel versleutelde tekst; automatisch vergrendelen na 15 minuten
 - Voor deze kluis: [[app:Naam]] linkt naar een app uit de catalogus, ||geheim|| blijft wazig tot je klikt, versiegeschiedenis, prullenbak, import van een Obsidian-kluis en export als zip
 - Bijlagen: plak of sleep een afbeelding of bestand in een notitie (`![[foto.png]]`); inhoud en naam worden in de browser versleuteld (max. 25 MB per bestand, 1 GB per gebruiker)

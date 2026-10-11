@@ -39,7 +39,7 @@ sleutel van je kluis.
 | Hernoemen | Een titel wijzigen past `[[links]]` in andere notities automatisch aan |
 | Tags | `#tag`, geneste tags `#infra/proxmox`, of `tags: [a, b]` in de eigenschappen. Klik op een tag om te zoeken. |
 | Eigenschappen | YAML-frontmatter tussen `---`-regels; `aliases` telt mee voor links |
-| Opmaak | GitHub-Markdown (tabellen, ~~doorhalen~~, taken), `==markeren==`, `%%commentaar%%`, callouts `> [!note]`, `> [!warning]-` (dichtgeklapt) |
+| Opmaak | GitHub-Markdown (tabellen, ~~doorhalen~~, taken), `==markeren==`, `%%commentaar%%`, callouts `> [!note]`, `> [!warning]-` (dichtgeklapt), voetnoten `[^1]`, wiskunde `$E=mc^2$` en `$$…$$` (KaTeX, als MathML), Mermaid-diagrammen in een ` ```mermaid `-blok, code-kleuren met een kopieerknop |
 | Taken | `- [ ] taak`; afvinken kan in de leesweergave |
 | Geheim | `\|\|pincode\|\|` blijft wazig tot je erop klikt (handig bij schermdelen) |
 | Zoeken | Links boven: woorden, `"exacte zin"`, `#tag`, `map:Runbooks`, `-uitsluiten` |
@@ -60,6 +60,8 @@ in twee tabbladen, dan krijg je de keuze welke versie blijft.
 
 Externe afbeeldingen worden niet geladen: de Content-Security-Policy van VaultX
 staat dat niet toe, zodat een notitie niets naar buiten lekt. Eigen bijlagen wel.
+Mermaid wordt pas geladen als een notitie een diagram bevat en tekent het als
+afbeelding (een SVG in een `<img>` kan geen scripts uitvoeren of iets laden).
 
 Bijlagen mogen standaard 25 MB per bestand zijn en samen 1 GB per gebruiker
 (`VAULTX_VAULT_NOTE_FILE_MAX_MB`, `VAULTX_VAULT_NOTE_STORAGE_MB`). Ze staan
@@ -73,7 +75,7 @@ docs/debian-ct.md, stap 5), anders krijgen grote notities en bijlagen een 413.
 
 - Notities delen met een team of organisatie (vraagt organisatiesleutels, zie
   "Gedeelde kluizen")
-- Canvas, Dataview-achtige queries, Mermaid en wiskunde (KaTeX), voetnoten
+- Canvas en Dataview-achtige queries
 - Notities in de Bitwarden-apps of offline op je telefoon
 - Ontgrendelen in de browser met Argon2id (enkel PBKDF2 nu; VaultX activeert
   kluizen met PBKDF2)

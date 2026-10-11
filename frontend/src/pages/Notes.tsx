@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import { api } from "../api/client";
 import type { Application, VaultStatus } from "../api/types";
 import { Card, ErrorBox, Loading, PageHeader } from "../components/ui";
+import { useDiagrams } from "../notes/diagrams";
 import { Editor, type EditorHandle, type Suggestion } from "../notes/Editor";
 import { baseName, isImage, mimeOf, useNoteFiles, type NoteFile } from "../notes/files";
 import { GraphView } from "../notes/Graph";
@@ -171,6 +172,7 @@ const DAILY_DEFAULT = `# {{date}}
 function Workspace({ userKey }: { userKey: UserKey }) {
   const store = useNotesStore(userKey);
   const files = useNoteFiles(userKey);
+  const diagrams = useDiagrams();
   const { lock } = useVaultKey();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -206,10 +208,16 @@ function Workspace({ userKey }: { userKey: UserKey }) {
     [catalog.data],
   );
   const { find: findFile, dataUrl, request: requestFile, broken: brokenFile, loaded: filesLoaded } = files;
+  const { get: getDiagram, request: requestDiagram, version: diagramsDrawn } = diagrams;
   const ctx: RenderContext = useMemo(
-    () => ({ index, apps, files: { find: findFile, dataUrl, request: requestFile, broken: brokenFile } }),
-    // filesLoaded: opnieuw renderen zodra een afbeelding ontsleuteld is
-    [index, apps, findFile, dataUrl, requestFile, brokenFile, filesLoaded],
+    () => ({
+      index,
+      apps,
+      files: { find: findFile, dataUrl, request: requestFile, broken: brokenFile },
+      diagrams: { get: getDiagram, request: requestDiagram },
+    }),
+    // filesLoaded en diagramsDrawn: opnieuw renderen zodra een afbeelding of diagram klaar is
+    [index, apps, findFile, dataUrl, requestFile, brokenFile, filesLoaded, getDiagram, requestDiagram, diagramsDrawn],
   );
 
   const flash = useCallback((msg: string) => {
@@ -561,6 +569,11 @@ function Workspace({ userKey }: { userKey: UserKey }) {
       if (a.dataset.note) return openNote(a.dataset.note, a.dataset.heading);
       if (a.dataset.heading) return scrollToHeading(a.dataset.heading);
       if (a.dataset.new) void run(() => createNote(a.dataset.new!, "", ""));
+      return;
+    }
+    if (t.classList.contains("code-copy")) {
+      const code = t.parentElement?.querySelector("pre")?.textContent ?? "";
+      void navigator.clipboard?.writeText(code).then(() => flash("Code gekopieerd."));
       return;
     }
     if (a?.classList.contains("file-link")) {

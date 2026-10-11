@@ -1,9 +1,14 @@
 // Markdown naar HTML met de Obsidian-uitbreidingen: [[wikilinks]], ![[embeds]], #tags,
-// ==markeren==, %%commentaar%%, > [!callouts], taken en eigenschappen. Daarbovenop een
-// eigen ||geheim|| dat wazig blijft tot je erop klikt. Alles gaat door DOMPurify.
+// ==markeren==, %%commentaar%%, > [!callouts], taken, eigenschappen, voetnoten, $wiskunde$,
+// Mermaid en code-kleuren. Daarbovenop een eigen ||geheim|| dat wazig blijft tot je erop
+// klikt. Alles gaat door DOMPurify.
 
 import DOMPurify from "dompurify";
+import katex from "katex";
 import { Marked, type Tokens } from "marked";
+import markedFootnote from "marked-footnote";
+import type { DiagramResolver } from "./diagrams";
+import { highlight } from "./highlight";
 import {
   appLinkName,
   isAppLink,
@@ -27,6 +32,8 @@ export interface RenderContext {
   apps: AppRef[];
   /** Bijlagen; zonder resolver worden ze als ontbrekend getoond (bv. in de versiegeschiedenis). */
   files?: FileResolver;
+  /** Mermaid-diagrammen; zonder resolver wordt de broncode getoond. */
+  diagrams?: DiagramResolver;
   /** Diepte van ingesloten notities; stopt bij 2 (en bij lussen). */
   depth?: number;
   trail?: string[];
@@ -136,11 +143,59 @@ function embedHtml(inner: string, ctx: RenderContext): string {
   return `<div class="embed"><div class="embed-title"><a class="wikilink" data-note="${esc(note.id)}">${esc(note.title)}${heading ? ` › ${esc(heading)}` : ""}</a></div>${readOnly}</div>`;
 }
 
+/** Wiskunde als MathML: de browser zet het zelf op, zonder stylesheet of inline stijlen. */
+function mathHtml(tex: string, display: boolean): string {
+  return katex.renderToString(tex, { output: "mathml", displayMode: display, throwOnError: false, strict: "ignore", trust: false });
+}
+
+function codeHtml(text: string, lang: string | undefined, ctx: RenderContext): string {
+  const l = (lang ?? "").trim().split(/\s+/)[0] ?? "";
+  if (l.toLowerCase() === "mermaid" && ctx.diagrams) {
+    const d = ctx.diagrams.get(text);
+    if (!d) {
+      ctx.diagrams.request(text);
+      return `<div class="diagram diagram-loading">Diagram tekenen…</div>`;
+    }
+    if ("url" in d) return `<div class="diagram"><img src="${esc(d.url)}" alt="Mermaid-diagram"></div>`;
+    return `<div class="diagram diagram-error"><div class="small">Mermaid: ${esc(d.error)}</div><pre><code>${esc(text)}</code></pre></div>`;
+  }
+  if (l.toLowerCase() === "math" || l.toLowerCase() === "latex") return `<div class="math-block">${mathHtml(text, true)}</div>`;
+  const colored = highlight(text, l);
+  const label = l ? `<span class="code-lang">${esc(l)}</span>` : "";
+  return `<div class="code-block">${label}<button type="button" class="code-copy" title="Kopiëren">Kopiëren</button><pre><code class="hljs${l ? ` language-${esc(l)}` : ""}">${colored ?? esc(text)}</code></pre></div>\n`;
+}
+
 function makeMarked(ctx: RenderContext): Marked {
   let task = 0;
   const m = new Marked({ gfm: true, breaks: false });
+  m.use(markedFootnote({ description: "Voetnoten", prefixId: "voetnoot-" }));
   m.use({
     extensions: [
+      {
+        name: "mathBlock",
+        level: "block",
+        start: (src: string) => src.match(/^\$\$/m)?.index,
+        tokenizer(src: string) {
+          const r = /^\$\$([\s\S]+?)\$\$[ \t]*(?:\n|$)/.exec(src);
+          if (r) return { type: "mathBlock", raw: r[0], text: r[1].trim() };
+          return undefined;
+        },
+        renderer: (t) => `<div class="math-block">${mathHtml((t as unknown as { text: string }).text, true)}</div>\n`,
+      },
+      {
+        name: "math",
+        level: "inline",
+        start: (src: string) => src.indexOf("$"),
+        tokenizer(src: string) {
+          const r = /^\$\$([^$]+?)\$\$/.exec(src) ?? /^\$(?![\s$])([^$\n]*?[^\s\\$])\$(?!\d)/.exec(src);
+          if (r) return { type: "math", raw: r[0], text: r[1], display: r[0].startsWith("$$") };
+          return undefined;
+        },
+        renderer: (t) => {
+          const { text, display } = t as unknown as { text: string; display: boolean };
+          return mathHtml(text, display);
+        },
+      },
       {
         name: "embed",
         level: "inline",
@@ -207,6 +262,9 @@ function makeMarked(ctx: RenderContext): Marked {
       },
     ],
     renderer: {
+      code({ text, lang }) {
+        return codeHtml(text, lang, ctx);
+      },
       heading({ tokens, depth, text }) {
         return `<h${depth} data-heading="${esc(slug(text))}">${this.parser.parseInline(tokens)}</h${depth}>\n`;
       },
@@ -257,7 +315,7 @@ export function renderBody(content: string, ctx: RenderContext): string {
   const withoutComments = content.replace(/%%[\s\S]*?%%/g, "");
   const html = makeMarked(ctx).parse(withoutComments, { async: false }) as string;
   return DOMPurify.sanitize(html, {
-    ADD_ATTR: ["target", "tabindex"],
+    ADD_ATTR: ["target", "tabindex", "encoding", "displaystyle", "mathvariant", "stretchy", "fence", "separator", "lspace", "rspace", "accent", "columnalign"],
     ADD_TAGS: ["details", "summary"],
     FORBID_TAGS: ["style", "form", "iframe", "object", "embed"],
   });
