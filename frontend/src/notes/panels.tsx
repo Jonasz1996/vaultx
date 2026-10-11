@@ -12,6 +12,7 @@ import {
   isAppLink,
   notePath,
   search,
+  textOf,
   unlinkedMentions,
   wordCount,
   type Backlink,
@@ -118,7 +119,10 @@ export function FileTree({
             onClick={() => onOpen(n.id)}
             title={notePath(n)}
           >
-            {n.title}
+            <span>
+              {n.kind === "canvas" && <span className="canvas-icon" title="Canvas">▦ </span>}
+              {n.title}
+            </span>
           </button>
         </li>
       ))}
@@ -155,7 +159,7 @@ export function TagList({ index, onTag }: { index: NoteIndex; onTag: (t: string)
 export function notesUsing(index: NoteIndex, f: NoteFile): Note[] {
   const names = [f.name.toLowerCase(), baseName(f.name).toLowerCase()];
   return index.notes.filter((n) => {
-    const body = n.body.toLowerCase();
+    const body = textOf(n).toLowerCase();
     return names.some((x) => body.includes(`[[${x}`) || body.includes(`](${x}`) || body.includes(`](${encodeURI(x)}`));
   });
 }
@@ -333,7 +337,7 @@ export function MetaPanel({
 }) {
   const backlinks = index.backlinks.get(note.id) ?? [];
   const mentions = useMemo(() => unlinkedMentions(index, note), [index, note]);
-  const headings = useMemo(() => extractHeadings(draft.body), [draft.body]);
+  const headings = useMemo(() => extractHeadings(textOf(draft)), [draft]);
   const outgoing = (index.outgoing.get(note.id) ?? []).filter((l) => l.target && !isAppLink(l.target));
   const tags = index.tagsOf.get(note.id) ?? [];
   const uniqueOut = [...new Map(outgoing.map((l) => [l.target.toLowerCase(), l])).values()];
@@ -401,7 +405,7 @@ export function MetaPanel({
       <Section title="Info">
         <dl className="kv kv-small">
           <dt>Woorden</dt>
-          <dd>{wordCount(draft.body).toLocaleString("nl-BE")}</dd>
+          <dd>{wordCount(textOf(draft)).toLocaleString("nl-BE")}</dd>
           <dt>Tags</dt>
           <dd>
             {tags.length
@@ -540,7 +544,7 @@ export function HistoryModal({
     load(note.id).then(setVersions, setError);
   }, [open, note.id, load]);
   const v = versions?.[selected];
-  const html = useMemo(() => (v ? renderNote(v.body, ctx).html : ""), [v, ctx]);
+  const html = useMemo(() => (v ? renderNote(textOf(v), ctx).html : ""), [v, ctx]);
   return (
     <Modal title={`Versiegeschiedenis: ${note.title}`} open={open} onClose={onClose} wide>
       <ErrorBox error={error} />
@@ -556,7 +560,7 @@ export function HistoryModal({
                 <button className={i === selected ? "active" : undefined} onClick={() => setSelected(i)}>
                   <span>{formatDate(x.saved_at)}</span>
                   <span className="muted small">
-                    versie {x.revision} · {wordCount(x.body)} woorden{x.title !== note.title ? ` · "${x.title}"` : ""}
+                    versie {x.revision} · {wordCount(textOf(x))} woorden{x.title !== note.title ? ` · "${x.title}"` : ""}
                   </span>
                 </button>
               </li>

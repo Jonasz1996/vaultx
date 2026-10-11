@@ -2,6 +2,7 @@
 // Obsidian-kluis). Alles gebeurt in de browser; de server krijgt enkel versleutelde notities.
 
 import { zipSync, strToU8 } from "fflate";
+import { parseCanvas, serializeCanvas } from "./canvas";
 import { cleanFolder, cleanTitle, emptyDoc, isoDate, notePath, type Note, type NoteDoc, type NoteIndex } from "./model";
 
 export interface ImportPlan {
@@ -35,7 +36,7 @@ export async function planImport(
     if (parts.length > 1 && (f as File & { webkitRelativePath?: string }).webkitRelativePath) parts.shift();
     if (parts.some((p) => p.startsWith("."))) continue;
     const name = parts.pop()!;
-    if (!/\.(md|markdown|txt)$/i.test(name)) {
+    if (!/\.(md|markdown|txt|canvas)$/i.test(name)) {
       const path = [...parts, name].join("/");
       if (f.size > maxFileBytes) skipped.push({ name: rel, reason: `bijlage groter dan ${Math.round(maxFileBytes / 1024 / 1024)} MB` });
       else if (!f.size) skipped.push({ name: rel, reason: "leeg bestand" });
@@ -50,7 +51,8 @@ export async function planImport(
       skipped.push({ name: rel, reason: "groter dan 1 MB" });
       continue;
     }
-    const title = cleanTitle(name.replace(/\.(md|markdown|txt)$/i, "")) || "Naamloos";
+    const canvas = /\.canvas$/i.test(name);
+    const title = cleanTitle(name.replace(/\.(md|markdown|txt|canvas)$/i, "")) || "Naamloos";
     const folder = cleanFolder(parts.join("/"));
     const key = notePath({ title, folder }).toLowerCase();
     if (taken.has(key)) {
@@ -58,7 +60,8 @@ export async function planImport(
       continue;
     }
     taken.add(key);
-    docs.push(emptyDoc(title, folder, await f.text()));
+    const text = await f.text();
+    docs.push(canvas ? emptyDoc(title, folder, serializeCanvas(parseCanvas(text)), "canvas") : emptyDoc(title, folder, text));
   }
   return { docs, attachments, skipped };
 }
@@ -71,8 +74,9 @@ export function exportZip(notes: Note[], attachments: { name: string; data: Uint
   for (const a of attachments) files[a.name.split("/").map(safeName).join("/")] = a.data;
   for (const n of notes.filter((x) => !x.deleted_at)) {
     const dir = n.folder ? n.folder.split("/").map(safeName).join("/") + "/" : "";
-    let path = `${dir}${safeName(n.title)}.md`;
-    for (let i = 1; files[path]; i++) path = `${dir}${safeName(n.title)} ${i}.md`;
+    const ext = n.kind === "canvas" ? "canvas" : "md";
+    let path = `${dir}${safeName(n.title)}.${ext}`;
+    for (let i = 1; files[path]; i++) path = `${dir}${safeName(n.title)} ${i}.${ext}`;
     files[path] = strToU8(n.body);
   }
   const zip = zipSync(files, { level: 6 });

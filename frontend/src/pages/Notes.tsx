@@ -4,6 +4,8 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import { api } from "../api/client";
 import type { Application, VaultStatus } from "../api/types";
 import { Card, ErrorBox, Loading, PageHeader } from "../components/ui";
+import { CanvasView } from "../notes/Canvas";
+import { serializeCanvas } from "../notes/canvas";
 import { useDiagrams } from "../notes/diagrams";
 import { Editor, type EditorHandle, type Suggestion } from "../notes/Editor";
 import { baseName, isImage, mimeOf, useNoteFiles, type NoteFile } from "../notes/files";
@@ -21,7 +23,8 @@ import {
   emptyDoc,
   isoDate,
   notePath,
-  renameLinks,
+  isCanvas,
+  renameInDoc,
   slug,
   splitFrontmatter,
   toggleTask,
@@ -334,9 +337,9 @@ function Workspace({ userKey }: { userKey: UserKey }) {
   );
 
   const createNote = useCallback(
-    async (title: string, folder = current?.folder ?? "", body = "") => {
+    async (title: string, folder = current?.folder ?? "", body = "", kind?: "canvas") => {
       const clean = cleanTitle(title) || "Naamloos";
-      const n = await store.create(emptyDoc(uniqueTitle(index, clean, cleanFolder(folder)), folder, body));
+      const n = await store.create(emptyDoc(uniqueTitle(index, clean, cleanFolder(folder)), folder, body, kind));
       openNote(n.id);
       return n;
     },
@@ -347,6 +350,17 @@ function Workspace({ userKey }: { userKey: UserKey }) {
     run(async () => {
       await createNote("Naamloos");
       setMode(mode === "read" ? "split" : mode);
+      setTimeout(() => {
+        const t = document.querySelector<HTMLInputElement>(".note-title");
+        t?.focus();
+        t?.select();
+      }, 50);
+    });
+
+  const newCanvas = () =>
+    run(async () => {
+      setMenu(false);
+      await createNote("Naamloos canvas", undefined, serializeCanvas({ nodes: [], edges: [] }), "canvas");
       setTimeout(() => {
         const t = document.querySelector<HTMLInputElement>(".note-title");
         t?.focus();
@@ -416,7 +430,8 @@ function Workspace({ userKey }: { userKey: UserKey }) {
       const linking = new Set((index.backlinks.get(current.id) ?? []).map((b) => b.from.id));
       let changed = 0;
       for (const id of linking) {
-        if (await store.update(id, (d) => ({ ...d, body: renameLinks(d.body, before.title, before.path, title) }))) changed++;
+        const newPath = notePath({ title, folder: d.doc.folder });
+        if (await store.update(id, (doc) => renameInDoc(doc, before.title, before.path, title, newPath))) changed++;
       }
       if (changed) flash(`Links in ${changed} ${changed === 1 ? "notitie" : "notities"} bijgewerkt.`);
     });
@@ -426,6 +441,7 @@ function Workspace({ userKey }: { userKey: UserKey }) {
       if (!current) return;
       const names = [current.title];
       const re = new RegExp(`(^|[^\\p{L}\\p{N}\\[])(${names.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![\\p{L}\\p{N}])`, "iu");
+      if (isCanvas(b.from)) return flash("Vermeldingen in een canvas pas je in het canvas zelf aan.");
       await store.update(b.from.id, (d) => ({
         ...d,
         body: d.body.replace(re, (_m, pre: string, word: string) =>
@@ -544,7 +560,7 @@ function Workspace({ userKey }: { userKey: UserKey }) {
 
   // ------------------------------------------------------------ voorbeeld
 
-  const rendered = useMemo(() => (draft ? renderNote(draft.body, ctx) : null), [draft, ctx]);
+  const rendered = useMemo(() => (draft && !isCanvas(draft) ? renderNote(draft.body, ctx) : null), [draft, ctx]);
   const previewRef = useRef<HTMLDivElement>(null);
 
   const scrollToHeading = useCallback((s: string) => {
@@ -634,9 +650,12 @@ function Workspace({ userKey }: { userKey: UserKey }) {
             </button>
             {menu && (
               <div className="menu" onMouseLeave={() => setMenu(false)}>
+                <button className="menu-item" onClick={newCanvas}>
+                  Nieuw canvas
+                </button>
                 <label className="menu-item">
                   Markdown-bestanden importeren
-                  <input type="file" accept=".md,.markdown,.txt" multiple hidden onChange={(e) => startImport(e.target.files)} />
+                  <input type="file" accept=".md,.markdown,.txt,.canvas" multiple hidden onChange={(e) => startImport(e.target.files)} />
                 </label>
                 <label className="menu-item">
                   Obsidian-kluis (map) importeren
@@ -765,13 +784,13 @@ function Workspace({ userKey }: { userKey: UserKey }) {
                   {{ saved: "Bewaard", dirty: "Gewijzigd", saving: "Bewaren…", error: "Niet bewaard" }[saveState]}
                 </span>
                 <div className="note-actions">
-                  <div className="seg" role="group" aria-label="Weergave">
+                  {!isCanvas(draft) && <div className="seg" role="group" aria-label="Weergave">
                     {(["edit", "split", "read"] as Mode[]).map((m) => (
                       <button key={m} className={mode === m ? "active" : undefined} onClick={() => setMode(m)}>
                         {{ edit: "Bewerken", split: "Naast elkaar", read: "Lezen" }[m]}
                       </button>
                     ))}
-                  </div>
+                  </div>}
                   <button className="btn btn-ghost" onClick={togglePin} title={draft.pinned ? "Bladwijzer weghalen" : "Bladwijzer"}>
                     {draft.pinned ? "★" : "☆"}
                   </button>
@@ -812,6 +831,17 @@ function Workspace({ userKey }: { userKey: UserKey }) {
                 </button>
               </div>
             )}
+            {isCanvas(draft) ? (
+              <CanvasView
+                key={current.id}
+                body={draft.body}
+                onChange={(body) => edit({ body })}
+                ctx={ctx}
+                files={files.files ?? []}
+                onContentClick={onPreviewClick}
+                onOpen={openNote}
+              />
+            ) : (<>
             {mode !== "read" && (
               <div className="md-toolbar">
                 <button onClick={() => editor.current?.wrap("**")} title="Vet (Ctrl+B)">
@@ -886,6 +916,7 @@ function Workspace({ userKey }: { userKey: UserKey }) {
                 </div>
               )}
             </div>
+            </>)}
             <HistoryModal
               open={history}
               note={current}

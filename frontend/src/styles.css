@@ -421,3 +421,55 @@ details.callout summary { color: inherit; }
 .md .footnotes ol { padding-left: 20px; }
 .md sup a, .md .footnotes a { text-decoration: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Canvas */
+.canvas-wrap { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; }
+.canvas-toolbar .menu-wrap { position: relative; }
+.canvas-toolbar button:disabled { opacity: 0.4; cursor: default; }
+.canvas-sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
+.canvas-spacer { flex: 1; }
+.canvas-zoom { min-width: 40px; text-align: center; }
+.canvas-colors { display: inline-flex; gap: 3px; align-items: center; }
+.md-toolbar .canvas-swatch { width: 20px; height: 20px; padding: 0; border-radius: 50%; font-size: 11px; line-height: 1; }
+.canvas-picker { position: absolute; top: 100%; left: 0; z-index: 30; min-width: 260px; max-height: 320px; overflow: auto; }
+.canvas-picker input { width: 100%; margin-bottom: 4px; }
+.canvas-board { position: relative; flex: 1; min-height: 420px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; cursor: grab; touch-action: none; outline: none;
+  background-color: var(--bg); background-image: radial-gradient(var(--border) 1px, transparent 1px); background-size: 22px 22px; }
+.canvas-board.panning { cursor: grabbing; }
+.canvas-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.canvas-node { position: absolute; box-sizing: border-box; user-select: none; border: 2px solid var(--border); border-radius: 8px; background: var(--surface); display: flex; flex-direction: column; cursor: default; }
+.canvas-node.selected { box-shadow: 0 0 0 2px var(--primary); }
+.canvas-node-content { padding: 8px 12px; overflow: hidden; flex: 1; min-height: 0; font-size: 14px; }
+.canvas-node-content.scrollable { overflow: auto; }
+.canvas-node-content > :first-child { margin-top: 0; }
+.canvas-node-content > :last-child { margin-bottom: 0; }
+.canvas-file-title { padding: 4px 12px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 13px; }
+.canvas-file-title button { all: unset; cursor: pointer; color: var(--primary); }
+.canvas-link-card a { font-weight: 600; }
+.canvas-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-group { background: color-mix(in srgb, var(--surface-2) 50%, transparent); border-style: solid; }
+.canvas-group-label { position: absolute; bottom: 100%; left: 0; padding: 2px 4px; font-weight: 600; font-size: 15px; color: var(--muted); white-space: nowrap; }
+.canvas-text-editor { flex: 1; resize: none; border: 0; outline: none; padding: 8px 12px; font: inherit; font-size: 14px; background: transparent; color: var(--text); border-radius: 8px; }
+.canvas-handle { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--surface); border: 2px solid var(--primary); opacity: 0; cursor: crosshair; z-index: 2; }
+.canvas-node:hover > .canvas-handle, .canvas-node.selected > .canvas-handle { opacity: 1; }
+.canvas-handle-top { top: -7px; left: calc(50% - 6px); }
+.canvas-handle-bottom { bottom: -7px; left: calc(50% - 6px); }
+.canvas-handle-left { left: -7px; top: calc(50% - 6px); }
+.canvas-handle-right { right: -7px; top: calc(50% - 6px); }
+.canvas-resize { position: absolute; right: -2px; bottom: -2px; width: 14px; height: 14px; cursor: nwse-resize; opacity: 0; z-index: 2;
+  background: linear-gradient(135deg, transparent 50%, var(--muted) 50%); border-bottom-right-radius: 8px; }
+.canvas-node:hover > .canvas-resize, .canvas-node.selected > .canvas-resize { opacity: 0.7; }
+.canvas-edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.canvas-edge-line { fill: none; stroke: var(--muted); stroke-width: 2.5; }
+.canvas-edge.selected .canvas-edge-line { stroke-width: 4; }
+.canvas-edge-draft { stroke-dasharray: 6 4; }
+.canvas-edge-hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
+.canvas-edge-label { position: absolute; transform: translate(-50%, -50%); background: var(--bg); padding: 1px 6px; border-radius: 4px; font-size: 13px; color: var(--text); white-space: nowrap; cursor: pointer; }
+.canvas-hint { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 40px; pointer-events: none; }
+.canvas-c1 { --cc: #e93147; } .canvas-c2 { --cc: #ec7500; } .canvas-c3 { --cc: #e0ac00; }
+.canvas-c4 { --cc: #08b94e; } .canvas-c5 { --cc: #00bfbc; } .canvas-c6 { --cc: #7852ee; }
+.canvas-node[class*="canvas-c"] { border-color: var(--cc); background: color-mix(in srgb, var(--cc) 8%, var(--surface)); }
+.canvas-group[class*="canvas-c"] { background: color-mix(in srgb, var(--cc) 10%, transparent); }
+.canvas-edge[class*="canvas-c"] .canvas-edge-line { stroke: var(--cc); }
+.md-toolbar .canvas-swatch[class*="canvas-c"] { background: var(--cc); border-color: var(--cc); }
+.canvas-icon { color: var(--muted); }

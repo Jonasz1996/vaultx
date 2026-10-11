@@ -2,6 +2,8 @@
 // tags, eigenschappen, zoeken). De server ziet hier niets van: hij bewaart enkel de
 // versleutelde JSON van NoteDoc.
 
+import { canvasText, renameInCanvas } from "./canvas";
+
 export interface NoteDoc {
   v: 1;
   title: string;
@@ -10,6 +12,8 @@ export interface NoteDoc {
   body: string;
   /** Bladwijzer (zoals "Bookmarks" in Obsidian). */
   pinned: boolean;
+  /** "canvas": body is een JSON Canvas (zie canvas.ts); anders Markdown. */
+  kind?: "canvas";
 }
 
 export interface Note extends NoteDoc {
@@ -23,8 +27,15 @@ export interface Note extends NoteDoc {
 export const TEMPLATE_FOLDER = "Sjablonen";
 export const DAILY_FOLDER = "Dagboek";
 
-export function emptyDoc(title: string, folder = "", body = ""): NoteDoc {
-  return { v: 1, title, folder: cleanFolder(folder), body, pinned: false };
+export function emptyDoc(title: string, folder = "", body = "", kind?: "canvas"): NoteDoc {
+  return { v: 1, title, folder: cleanFolder(folder), body, pinned: false, ...(kind ? { kind } : {}) };
+}
+
+export const isCanvas = (n: Pick<NoteDoc, "kind">) => n.kind === "canvas";
+
+/** De Markdown-tekst van een notitie; voor een canvas de tekst van zijn kaarten. */
+export function textOf(n: Pick<NoteDoc, "kind" | "body">): string {
+  return n.kind === "canvas" ? canvasText(n.body) : n.body;
 }
 
 export function parseDoc(json: string): NoteDoc {
@@ -35,11 +46,12 @@ export function parseDoc(json: string): NoteDoc {
     folder: typeof d.folder === "string" ? cleanFolder(d.folder) : "",
     body: typeof d.body === "string" ? d.body : "",
     pinned: d.pinned === true,
+    ...(d.kind === "canvas" ? { kind: "canvas" as const } : {}),
   };
 }
 
 export function docOf(n: NoteDoc): NoteDoc {
-  return { v: 1, title: n.title, folder: n.folder, body: n.body, pinned: n.pinned };
+  return { v: 1, title: n.title, folder: n.folder, body: n.body, pinned: n.pinned, ...(n.kind ? { kind: n.kind } : {}) };
 }
 
 export function cleanFolder(folder: string): string {
@@ -172,6 +184,7 @@ export function extractTags(body: string): string[] {
 }
 
 export function aliasesOf(n: NoteDoc): string[] {
+  if (isCanvas(n)) return [];
   return propList(splitFrontmatter(n.body).props, "aliases", "alias");
 }
 
@@ -252,9 +265,10 @@ export function buildIndex(all: Note[]): NoteIndex {
       const parts = n.folder.split("/");
       parts.forEach((_, i) => folders.add(parts.slice(0, i + 1).join("/")));
     }
-    const links = extractLinks(n.body);
+    const text = textOf(n);
+    const links = extractLinks(text);
     outgoing.set(n.id, links);
-    const lines = n.body.split("\n");
+    const lines = text.split("\n");
     const seen = new Set<string>();
     for (const l of links) {
       if (!l.target || isAppLink(l.target)) continue;
@@ -271,7 +285,7 @@ export function buildIndex(all: Note[]): NoteIndex {
       if (!backlinks.has(to.id)) backlinks.set(to.id, []);
       backlinks.get(to.id)!.push({ from: n, line: lines[l.line] ?? "" });
     }
-    const t = extractTags(n.body);
+    const t = extractTags(text);
     tagsOf.set(n.id, t);
     for (const tag of t) {
       // #a/b telt ook mee voor #a
@@ -306,10 +320,11 @@ export function unlinkedMentions(index: NoteIndex, note: Note): Backlink[] {
   const out: Backlink[] = [];
   for (const n of index.notes) {
     if (n.id === note.id || linked.has(n.id)) continue;
-    const masked = maskCode(n.body).replace(WIKILINK_RE, (m) => " ".repeat(m.length));
+    const text = textOf(n);
+    const masked = maskCode(text).replace(WIKILINK_RE, (m) => " ".repeat(m.length));
     const lines = masked.split("\n");
     const i = lines.findIndex((l) => re.test(l));
-    if (i >= 0) out.push({ from: n, line: n.body.split("\n")[i] });
+    if (i >= 0) out.push({ from: n, line: text.split("\n")[i] });
   }
   return out;
 }
@@ -322,6 +337,14 @@ export function renameLinks(body: string, oldTitle: string, oldPath: string, new
     if (!olds.has(norm(target))) return whole;
     return `${bang}[[${newTitle}${heading ? `#${heading}` : ""}${alias ? `|${alias}` : ""}]]`;
   });
+}
+
+/** renameLinks voor een hele notitie, ook voor een canvas (file-kaarten en tekstkaarten). */
+export function renameInDoc(doc: NoteDoc, oldTitle: string, oldPath: string, newTitle: string, newPath: string): NoteDoc {
+  if (!isCanvas(doc)) return { ...doc, body: renameLinks(doc.body, oldTitle, oldPath, newTitle) };
+  const olds = new Set([norm(oldTitle), norm(oldPath)]);
+  const body = renameInCanvas(doc.body, (t) => olds.has(norm(t)), newPath, (text) => renameLinks(text, oldTitle, oldPath, newTitle));
+  return { ...doc, body };
 }
 
 // ---------------------------------------------------------------- catalogus-links
@@ -366,7 +389,7 @@ export function search(index: NoteIndex, query: string): SearchHit[] {
     } else {
       const t = norm(tok);
       if (!neg) terms.push(t);
-      f = (n) => norm(n.title).includes(t) || n.body.toLowerCase().includes(t);
+      f = (n) => norm(n.title).includes(t) || textOf(n).toLowerCase().includes(t);
     }
     filters.push(neg ? (n) => !f(n) : f);
   }
@@ -374,7 +397,7 @@ export function search(index: NoteIndex, query: string): SearchHit[] {
   const score = (n: Note) => (terms.some((t) => norm(n.title).includes(t)) ? 0 : 1);
   return hits
     .sort((a, b) => score(a) - score(b) || b.updated_at.localeCompare(a.updated_at))
-    .map((note) => ({ note, snippet: snippetFor(note.body, terms) }));
+    .map((note) => ({ note, snippet: snippetFor(textOf(note), terms) }));
 }
 
 function snippetFor(body: string, terms: string[]): string | null {

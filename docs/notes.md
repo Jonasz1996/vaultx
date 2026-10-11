@@ -34,6 +34,7 @@ sleutel van je kluis.
 | Links | `[[Titel]]`, `[[Map/Titel]]`, `[[Titel#Kop]]`, `[[Titel\|eigen tekst]]`. Een link naar een notitie die nog niet bestaat, maakt haar aan bij een klik. `[[` in de editor geeft suggesties. |
 | Ingesloten notitie | `![[Titel]]` of `![[Titel#Kop]]` (twee niveaus diep) |
 | Bijlagen | Plak (Ctrl+V) of sleep een afbeelding of bestand in de editor, of gebruik "Bijlage" in de werkbalk. Dat zet `![[naam.png]]` in de tekst. Afbeeldingen worden getoond, andere bestanden worden een 📎-link die ontsleutelt en downloadt. `![[foto.png\|300]]` zet de breedte, `![](foto.png)` werkt ook. Het tabblad "Bijlagen" links toont alles met gebruik en opslag. |
+| Canvas | Menu ⋯ → "Nieuw canvas": een oneindig bord met tekstkaarten (Markdown), notities, bijlagen, weblinks en groepen. Dubbelklik maakt een kaart, sleep vanaf een bolletje op de rand om te verbinden (dubbelklik op een pijl voor een label), kleuren, Ctrl+Z, Ctrl+scroll zoomt. Formaat is JSON Canvas van Obsidian: `.canvas`-bestanden importeren en exporteren gaat gewoon. Notities op een canvas krijgen het canvas als backlink. |
 | Catalogus-app | `[[app:Grafana]]` linkt naar de app in de VaultX-catalogus |
 | Backlinks | Rechts: wie naar deze notitie linkt, met de regel errond, en niet-gelinkte vermeldingen met "Link maken" |
 | Hernoemen | Een titel wijzigen past `[[links]]` in andere notities automatisch aan |
@@ -75,7 +76,7 @@ docs/debian-ct.md, stap 5), anders krijgen grote notities en bijlagen een 413.
 
 - Notities delen met een team of organisatie (vraagt organisatiesleutels, zie
   "Gedeelde kluizen")
-- Canvas en Dataview-achtige queries
+- Dataview-achtige queries
 - Notities in de Bitwarden-apps of offline op je telefoon
 - Ontgrendelen in de browser met Argon2id (enkel PBKDF2 nu; VaultX activeert
   kluizen met PBKDF2)

@@ -288,7 +288,7 @@ def main() -> None:
 
             step("Importeren: 2 Markdown-bestanden en een afbeelding als bijlage")
             page.locator("button[aria-label=Meer]").click()
-            page.locator("input[accept='.md,.markdown,.txt']").set_input_files(
+            page.locator("input[accept='.md,.markdown,.txt,.canvas']").set_input_files(
                 [
                     str(importdir / "Wifi thuis.md"),
                     str(importdir / "Boodschappen.md"),
@@ -382,9 +382,57 @@ def main() -> None:
             page.locator(".trash").get_by_role("button", name="Terugzetten").click()
             expect(page.get_by_text("De prullenbak is leeg.")).to_be_visible()
 
+            step("Canvas: kaarten maken, verbinden en verslepen")
+            page.locator("button[aria-label=Meer]").click()
+            page.get_by_role("button", name="Nieuw canvas").click()
+            title = page.locator(".note-title")
+            expect(title).to_be_focused()
+            title.fill("Infra-overzicht")
+            title.press("Enter")
+            board = page.locator(".canvas-board")
+            box = board.bounding_box()
+            board.dblclick(position={"x": 120, "y": 120})
+            page.locator(".canvas-text-editor").fill("**Back-ups** #infra/backup")
+            page.locator(".canvas-text-editor").press("Escape")
+            text_card = page.locator(".canvas-node.canvas-text")
+            expect(text_card).to_contain_text("Back-ups")
+            page.get_by_role("button", name="+ Notitie").click()
+            page.locator(".canvas-picker input").fill("Grafana")
+            page.keyboard.press("Enter")
+            file_card = page.locator(".canvas-node.canvas-file")
+            expect(file_card.locator(".canvas-file-title")).to_have_text("Grafana runbook")
+            # Verbinden: van het bolletje rechts van de tekstkaart naar de notitiekaart
+            text_card.hover()
+            h = text_card.locator(".canvas-handle-right").bounding_box()
+            f = file_card.bounding_box()
+            page.mouse.move(h["x"] + h["width"] / 2, h["y"] + h["height"] / 2)
+            page.mouse.down()
+            page.mouse.move(f["x"] + 40, f["y"] + 60, steps=8)
+            page.mouse.up()
+            expect(page.locator(".canvas-edge")).to_have_count(1)
+            # Verslepen
+            t = text_card.bounding_box()
+            page.mouse.move(t["x"] + t["width"] / 2, t["y"] + t["height"] / 2)
+            page.mouse.down()
+            page.mouse.move(t["x"] + t["width"] / 2 - 40, t["y"] + t["height"] / 2 - 90, steps=6)
+            page.mouse.up()
+            t2 = text_card.bounding_box()
+            assert t2["y"] < t["y"] - 50, (t, t2)
+            # Dubbelklik op een kaart bewerkt ze (en maakt geen nieuwe kaart)
+            text_card.dblclick()
+            expect(page.locator(".canvas-text-editor")).to_be_visible()
+            page.locator(".canvas-text-editor").press("Escape")
+            expect(page.locator(".canvas-node")).to_have_count(2)
+            saved(page)
+            assert box["width"] > 300
+            shot(page, "09-canvas")
+            # Het canvas telt mee als backlink van de notitie op de kaart
+            open_note(page, "Grafana runbook")
+            expect(page.locator(".backlinks")).to_contain_text("Infra-overzicht")
+
             step("Server ziet enkel versleutelde tekst")
             notes = page.request.get(f"{ui}/api/v1/me/notes").json()
-            assert len(notes) == 5 and all(n["content"].startswith("2.") for n in notes), notes
+            assert len(notes) == 6 and all(n["content"].startswith("2.") for n in notes), notes
             dsn = DB.replace("postgresql+psycopg://", "postgresql://")
             with psycopg.connect(dsn) as conn:
                 rows = conn.execute(
@@ -408,7 +456,10 @@ def main() -> None:
             expect(page.get_by_role("heading", name="Kluis ontgrendelen")).to_be_visible()
             page.locator("input[type=password]").fill(PASSWORD)
             page.get_by_role("button", name="Ontgrendelen").click()
-            expect(page.locator(".tree .tree-item")).to_have_count(6, timeout=30_000)
+            expect(page.locator(".tree .tree-item")).to_have_count(7, timeout=30_000)
+            open_note(page, "Infra-overzicht")
+            expect(page.locator(".canvas-node")).to_have_count(2)
+            expect(page.locator(".canvas-edge")).to_have_count(1)
             open_note(page, "Wifi thuis")
             page.get_by_role("button", name="Lezen").click()
             expect(page.locator(".preview .secret")).to_have_text("geheim-wifi")
