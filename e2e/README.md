@@ -146,3 +146,20 @@ VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
   python ../e2e/publish_e2e.py http://localhost:81 admin@example.com een-lang-wachtwoord \
   --authentik http://localhost:9000 --authentik-token <beheertoken> --browser
 ```
+
+# End-to-end test fase 7: notities in de browser
+
+`notes_e2e.py` start een nep-Authentik, de backend en de gebouwde webinterface
+(`vite preview`, met de backend erachter) en doorloopt in Chromium: kluis
+activeren, ontgrendelen (fout en juist wachtwoord), voorbeeldnotities met
+wikilinks, een catalogus-link, callout, taken en een geheim, `[[`-suggesties,
+hernoemen met links bijwerken, zoeken op tag, grafiek, import, versies,
+prullenbak en vergrendelen. Daarna kijkt het in PostgreSQL dat er nergens klare
+tekst staat.
+
+```bash
+cd frontend && npm ci && npm run build && cd ..
+pip install playwright && playwright install chromium
+VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
+  python e2e/notes_e2e.py ./notes-shots    # map voor screenshots is optioneel
+```

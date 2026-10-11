@@ -5,8 +5,16 @@ en Nginx Proxy Manager-integratie. Deze repository bevat **phase-0** (de
 fundering), **fase 1** (NPM-connector en applicatiecatalogus), **fase 2**
 (een persoonlijke kluis voor de officiële Bitwarden®-clients), **fase 3**
 (Authentik-bescherming zetten in NPM), **fase 4** (ook de Authentik-kant
-automatisch aanmaken) en **fase 5** (automatische login: wie al bij Authentik
-is aangemeld, komt meteen in de app).
+automatisch aanmaken), **fase 5** (automatische login: wie al bij Authentik
+is aangemeld, komt meteen in de app), **fase 6** (app publiceren) en **fase 7**
+(versleutelde notities zoals in Obsidian).
+
+**Fase 7**
+
+- "Notities" in het menu: Markdown-notities met [[wikilinks]], backlinks, niet-gelinkte vermeldingen, #tags (ook genest), eigenschappen (frontmatter), callouts, taken, ingesloten notities, een grafiek, dagnotities, sjablonen, bladwijzers, snelkiezer (Ctrl+O) en zoeken
+- End-to-end versleuteld met de sleutel van je kluis: de browser ontgrendelt met je master password, de server ziet enkel versleutelde tekst; automatisch vergrendelen na 15 minuten
+- Voor deze kluis: [[app:Naam]] linkt naar een app uit de catalogus, ||geheim|| blijft wazig tot je klikt, versiegeschiedenis, prullenbak, import van een Obsidian-kluis en export als zip
+- Getest in Chromium (ook in CI), inclusief controle dat PostgreSQL geen klare tekst bevat. Zie [docs/notes.md](docs/notes.md)
 
 **Fase 5**
 
