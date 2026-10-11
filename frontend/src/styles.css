@@ -198,7 +198,7 @@ fieldset.form-group legend { font-weight: 600; padding: 0 4px; }
 .content:has(.notes-app) { max-width: none; padding: 0; }
 .notes-app { display: grid; grid-template-columns: 250px minmax(0, 1fr) 290px; height: 100vh; min-height: 0; }
 .notes-app:not(:has(.notes-meta)) { grid-template-columns: 250px minmax(0, 1fr); }
-.notes-side { border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 10px; padding: 14px 10px; min-height: 0; overflow: auto; }
+.notes-side { border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 10px; padding: 14px 10px; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .notes-side-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .notes-side-actions .btn { padding: 6px 10px; }
 .btn.selected { background: var(--info-bg); color: var(--info-fg); border-color: var(--info-bg); }
@@ -206,8 +206,8 @@ fieldset.form-group legend { font-weight: 600; padding: 0 4px; }
 .notes-side-foot { margin-top: auto; border-top: 1px solid var(--border); padding-top: 8px; display: flex; justify-content: space-between; align-items: center; }
 .side-group { display: flex; flex-direction: column; gap: 2px; }
 .side-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; padding: 0 8px; }
-.side-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
-.side-tabs button { all: unset; cursor: pointer; padding: 6px 8px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; }
+.side-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+.side-tabs button { all: unset; cursor: pointer; padding: 6px 4px; font-weight: 600; font-size: 13px; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); border-bottom: 2px solid transparent; }
 .side-tabs button.active { color: var(--text); border-bottom-color: var(--primary); }
 .count { font-size: 11px; color: var(--muted); background: var(--surface-2); border-radius: 999px; padding: 0 6px; margin-left: 4px; font-weight: 600; }
 .tree ul, ul.tree, .tag-list, .results, .backlinks, .plain-links, .outline { list-style: none; margin: 0; padding: 0; }
@@ -242,6 +242,8 @@ fieldset.form-group legend { font-weight: 600; padding: 0 4px; }
 .md-toolbar { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 .md-toolbar button { font: inherit; font-size: 12.5px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
 .md-toolbar button:hover { background: var(--surface-2); }
+.md-toolbar-file { font-size: 12.5px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+.md-toolbar-file:hover { background: var(--surface-2); }
 .md-toolbar select { padding: 3px 8px; font-size: 12.5px; }
 .note-body { flex: 1; min-height: 0; display: grid; gap: 14px; }
 .note-body.mode-split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -341,6 +343,14 @@ fieldset.form-group legend { font-weight: 600; padding: 0 4px; }
 .secret.revealed { filter: none; }
 .embed { border-left: 3px solid var(--primary); background: var(--surface-2); border-radius: 0 8px 8px 0; padding: 6px 14px; margin: 0.6em 0; }
 .embed-title { font-size: 12px; margin-bottom: 4px; }
+.md img.note-img { max-width: 100%; height: auto; border-radius: 6px; vertical-align: middle; }
+.file-link { display: inline-block; cursor: pointer; border: 1px solid var(--border); border-radius: 6px; padding: 1px 8px; font-size: 13px; text-decoration: none; }
+.file-link:hover { background: var(--surface-2); }
+.file-loading { display: inline-block; color: var(--muted); font-size: 12.5px; padding: 2px 8px; }
+.attachments .tree-item { display: flex; justify-content: space-between; gap: 6px; }
+.attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.attachment-detail { padding: 4px 8px 8px 16px; display: grid; gap: 4px; }
+.attachment-detail ul { margin: 0; padding-left: 16px; }
 .embed-missing { display: inline-block; color: var(--muted); font-size: 12.5px; border: 1px dashed var(--border); border-radius: 6px; padding: 2px 8px; }
 .callout { border-radius: 8px; padding: 8px 14px; margin: 0.7em 0; border-left: 4px solid; }
 .callout-title { font-weight: 700; margin-bottom: 2px; }

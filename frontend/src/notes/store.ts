@@ -156,8 +156,15 @@ export function useNotesStore(key: UserKey) {
   const importMany = useCallback(
     async (docs: NoteDoc[], onProgress?: (done: number) => void): Promise<Note[]> => {
       const created: Note[] = [];
-      for (let i = 0; i < docs.length; i += 100) {
-        const chunk = await Promise.all(docs.slice(i, i + 100).map(async (d) => ({ content: await seal(d, key) })));
+      const sealed = await Promise.all(docs.map(async (d) => ({ content: await seal(d, key) })));
+      // Per verzoek hoogstens 100 notities en ongeveer 8 MB, ruim onder de limiet van nginx.
+      for (let i = 0; i < sealed.length; ) {
+        const chunk = [sealed[i++]];
+        let bytes = chunk[0].content.length;
+        while (i < sealed.length && chunk.length < 100 && bytes + sealed[i].content.length < 8_000_000) {
+          bytes += sealed[i].content.length;
+          chunk.push(sealed[i++]);
+        }
         const res = await api.post<EncryptedNote[]>(`${BASE}/import`, { notes: chunk });
         const opened = await Promise.all(res.map((e) => open(e, key)));
         put(opened);

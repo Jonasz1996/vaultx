@@ -6,19 +6,29 @@ import { cleanFolder, cleanTitle, emptyDoc, isoDate, notePath, type Note, type N
 
 export interface ImportPlan {
   docs: NoteDoc[];
+  /** Bijlagen (afbeeldingen, pdf's, ...) met hun pad in de kluis als naam. */
+  attachments: { file: File; name: string }[];
   skipped: { name: string; reason: string }[];
 }
 
 const MAX_NOTE_BYTES = 1_000_000;
 
 /**
- * Leest .md-bestanden. Bij een map (webkitdirectory) wordt de mapnaam van de kluis zelf
- * weggelaten en worden .obsidian, .trash en andere verborgen mappen overgeslagen.
+ * Leest .md-bestanden en neemt de andere bestanden mee als bijlagen. Bij een map
+ * (webkitdirectory) wordt de mapnaam van de kluis zelf weggelaten en worden .obsidian,
+ * .trash en andere verborgen mappen overgeslagen.
  */
-export async function planImport(files: File[], index: NoteIndex): Promise<ImportPlan> {
+export async function planImport(
+  files: File[],
+  index: NoteIndex,
+  existingFiles: string[] = [],
+  maxFileBytes = 25 * 1024 * 1024,
+): Promise<ImportPlan> {
   const skipped: ImportPlan["skipped"] = [];
   const docs: NoteDoc[] = [];
+  const attachments: ImportPlan["attachments"] = [];
   const taken = new Set(index.notes.map((n) => notePath(n).toLowerCase()));
+  const takenFiles = new Set(existingFiles.map((n) => n.toLowerCase()));
   for (const f of files) {
     const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
     const parts = rel.split("/");
@@ -26,7 +36,14 @@ export async function planImport(files: File[], index: NoteIndex): Promise<Impor
     if (parts.some((p) => p.startsWith("."))) continue;
     const name = parts.pop()!;
     if (!/\.(md|markdown|txt)$/i.test(name)) {
-      skipped.push({ name: rel, reason: "geen Markdown (bijlagen volgen later)" });
+      const path = [...parts, name].join("/");
+      if (f.size > maxFileBytes) skipped.push({ name: rel, reason: `bijlage groter dan ${Math.round(maxFileBytes / 1024 / 1024)} MB` });
+      else if (!f.size) skipped.push({ name: rel, reason: "leeg bestand" });
+      else if (takenFiles.has(path.toLowerCase())) skipped.push({ name: rel, reason: "bijlage bestaat al" });
+      else {
+        takenFiles.add(path.toLowerCase());
+        attachments.push({ file: f, name: path });
+      }
       continue;
     }
     if (f.size > MAX_NOTE_BYTES) {
@@ -43,14 +60,15 @@ export async function planImport(files: File[], index: NoteIndex): Promise<Impor
     taken.add(key);
     docs.push(emptyDoc(title, folder, await f.text()));
   }
-  return { docs, skipped };
+  return { docs, attachments, skipped };
 }
 
 const safeName = (s: string) => s.replace(/[\\/:*?"<>|]/g, "-").trim() || "Naamloos";
 
-/** Zip met één .md-bestand per notitie, in de mappenstructuur van de notities. */
-export function exportZip(notes: Note[]): Blob {
+/** Zip met één .md-bestand per notitie, in de mappenstructuur van de notities, plus de bijlagen. */
+export function exportZip(notes: Note[], attachments: { name: string; data: Uint8Array }[] = []): Blob {
   const files: Record<string, Uint8Array> = {};
+  for (const a of attachments) files[a.name.split("/").map(safeName).join("/")] = a.data;
   for (const n of notes.filter((x) => !x.deleted_at)) {
     const dir = n.folder ? n.folder.split("/").map(safeName).join("/") + "/" : "";
     let path = `${dir}${safeName(n.title)}.md`;

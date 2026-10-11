@@ -51,3 +51,17 @@ class NoteImport(BaseModel):
     """Meerdere notities in één keer, bv. een geïmporteerde Obsidian-kluis."""
 
     notes: list[NoteContent] = Field(min_length=1, max_length=200)
+
+
+class NoteFileOut(ORMModel):
+    id: UUID
+    name: str = Field(description="EncString (type 2) met de bestandsnaam")
+    size: int = Field(description="Grootte van de versleutelde blob in bytes")
+    created_at: datetime
+
+
+class NoteFilesOut(BaseModel):
+    files: list[NoteFileOut]
+    used_bytes: int
+    quota_bytes: int
+    max_file_bytes: int

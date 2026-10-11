@@ -461,6 +461,20 @@ export interface EncryptedNote {
   deleted_at: string | null;
 }
 
+export interface EncryptedNoteFile {
+  id: string;
+  name: string;
+  size: number;
+  created_at: string;
+}
+
+export interface EncryptedNoteFiles {
+  files: EncryptedNoteFile[];
+  used_bytes: number;
+  quota_bytes: number;
+  max_file_bytes: number;
+}
+
 export interface EncryptedNoteVersion {
   revision: number;
   content: string;

@@ -159,6 +159,23 @@ export async function decryptText(encString: string, key: UserKey): Promise<stri
 }
 
 /** Normalisatie zoals de clients: e-mailadres zonder spaties, kleine letters. */
+/** Bestand versleutelen als EncArrayBuffer (zoals Bitwarden-bijlagen): 2 | iv | mac | ct. */
+export async function encryptBytes(data: Uint8Array<ArrayBuffer>, key: UserKey): Promise<Uint8Array<ArrayBuffer>> {
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const ct = new Uint8Array(await subtle().encrypt({ name: "AES-CBC", iv }, key.aes, data));
+  const mac = new Uint8Array(await subtle().sign("HMAC", key.mac, concat(iv, ct)));
+  return concat(new Uint8Array([2]), iv, mac, ct);
+}
+
+export async function decryptBytes(buf: Uint8Array<ArrayBuffer>, key: UserKey): Promise<Uint8Array<ArrayBuffer>> {
+  if (buf.length < 65 || buf[0] !== 2) throw new Error("Onbekend versleutelingsformaat");
+  const iv = buf.slice(1, 17);
+  const mac = buf.slice(17, 49);
+  const ct = buf.slice(49);
+  if (!(await subtle().verify("HMAC", key.mac, mac, concat(iv, ct)))) throw new Error("Bijlage is beschadigd of gewijzigd");
+  return new Uint8Array(await subtle().decrypt({ name: "AES-CBC", iv }, key.aes, ct));
+}
+
 export function normalizeSalt(email: string): string {
   return email.trim().toLowerCase();
 }

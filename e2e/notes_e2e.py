@@ -4,7 +4,7 @@ Start een nep-Authentik (OIDC), de VaultX-backend en de gebouwde webinterface
 (`vite preview`, met de backend erachter zoals nginx dat doet) en doorloopt:
 kluis activeren, ontgrendelen (fout en juist wachtwoord), voorbeeldnotities,
 wikilinks, een catalogus-link, taken afvinken, [[-suggesties, hernoemen met
-links bijwerken, zoeken op tag, snelkiezer, grafiek, import, versiegeschiedenis,
+links bijwerken, zoeken op tag, snelkiezer, grafiek, import, bijlagen, versiegeschiedenis,
 prullenbak en vergrendelen. Daarna controleert het in PostgreSQL dat er nergens
 klare tekst van de notities staat.
 
@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
 from pathlib import Path
 
 import httpx
@@ -61,6 +62,18 @@ def wait_http(url: str, what: str) -> None:
             pass
         time.sleep(0.2)
     raise SystemExit(f"{what} start niet ({url})")
+
+
+def png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
+    """Kleine, echte PNG (effen kleur) zonder extra bibliotheken."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return len(data).to_bytes(4, "big") + kind + data + zlib.crc32(kind + data).to_bytes(4, "big")
+
+    raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+    ihdr = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes([8, 2, 0, 0, 0])
+    body = chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    return b"\x89PNG\r\n\x1a\n" + body
 
 
 def saved(page: Page) -> None:
@@ -137,7 +150,9 @@ def main() -> None:
         "# Wifi thuis\n\nSSID: thuis\nWachtwoord: ||geheim-wifi||\n#thuis\n"
     )
     (importdir / "Boodschappen.md").write_text("- [ ] melk\n- [x] brood\n")
-    (importdir / "foto.png").write_bytes(b"\x89PNG")
+    (importdir / "foto.png").write_bytes(png(40, 20, (200, 40, 40)))
+    (importdir / "netwerkschema.png").write_bytes(png(320, 120, (40, 120, 200)))
+    (importdir / "wachtwoorden-router.txt").write_text("admin / geheim-router\n")
     try:
         wait_http(f"http://127.0.0.1:{api_port}/health", "backend")
         wait_http(ui, "webinterface")
@@ -262,7 +277,7 @@ def main() -> None:
             shot(page, "05-grafiek")
             page.get_by_role("button", name="Grafiek", exact=True).click()
 
-            step("Importeren: 2 Markdown-bestanden, png overgeslagen")
+            step("Importeren: 2 Markdown-bestanden en een afbeelding als bijlage")
             page.locator("button[aria-label=Meer]").click()
             page.locator("input[accept='.md,.markdown,.txt']").set_input_files(
                 [
@@ -271,10 +286,36 @@ def main() -> None:
                     str(importdir / "foto.png"),
                 ]
             )
-            expect(page.locator(".modal-card")).to_contain_text("2 notities worden")
+            expect(page.locator(".modal-card")).to_contain_text("2 notities en 1 bijlage worden")
             page.locator(".modal-card").get_by_role("button", name="Importeren").click()
-            expect(page.locator(".toast")).to_contain_text("2 notities geïmporteerd")
+            expect(page.locator(".toast")).to_contain_text("2 notities en 1 bijlage geïmporteerd")
             expect(page.locator(".tree .tree-item")).to_have_count(6)  # map Runbooks + 5 notities
+
+            step("Bijlagen: afbeelding en bestand opladen, tonen en downloaden")
+            open_note(page, "Proxmox herstel")
+            page.get_by_role("button", name="Naast elkaar").click()
+            editor = page.locator("textarea.editor")
+            editor.press("Control+End")
+            editor.press_sequentially("\n\nOud: ![[foto.png|80]]\n")
+            page.locator(".md-toolbar-file input[type=file]").set_input_files(
+                [str(importdir / "netwerkschema.png"), str(importdir / "wachtwoorden-router.txt")]
+            )
+            saved(page)
+            value = editor.input_value()
+            assert "![[netwerkschema.png]]\n![[wachtwoorden-router.txt]]" in value, value
+            imgs = page.locator(".preview img.note-img")
+            expect(imgs).to_have_count(2, timeout=15_000)
+            for i in range(2):
+                assert imgs.nth(i).get_attribute("src").startswith("data:image/png;base64,")
+            assert imgs.first.get_attribute("width") == "80"
+            expect(imgs.nth(1)).to_have_js_property("naturalWidth", 320)
+            with page.expect_download() as dl:
+                page.locator(".preview .file-link", has_text="wachtwoorden-router.txt").click()
+            assert Path(dl.value.path()).read_text() == "admin / geheim-router\n"
+            page.locator(".side-tabs").get_by_role("button", name="Bijlagen").click()
+            expect(page.locator(".attachments .attachment")).to_have_count(3)
+            shot(page, "07-bijlagen")
+            page.locator(".side-tabs").get_by_role("button", name="Bestanden").click()
 
             step("Versiegeschiedenis")
             open_note(page, "Proxmox herstel")
@@ -323,6 +364,13 @@ def main() -> None:
                 for plain in ("Proxmox", "Grafana", "geheim-wifi", "Welkom", "infra"):
                     assert plain not in content, f"klare tekst '{plain}' in de database"
             print(f"    {len(rows)} versleutelde blobs in de database, geen klare tekst")
+            with psycopg.connect(dsn) as conn:
+                files = conn.execute("SELECT name, data FROM vault_note_files").fetchall()
+            assert len(files) == 3, files
+            for name, data in files:
+                assert name.startswith("2.") and "png" not in name and "router" not in name, name
+                assert data[0] == 2 and b"PNG" not in data[:64] and b"geheim-router" not in data
+            print(f"    {len(files)} bijlagen in de database, namen en inhoud versleuteld")
 
             step("Vergrendelen en opnieuw ontgrendelen")
             page.get_by_role("button", name="Vergrendelen").click()
@@ -333,6 +381,8 @@ def main() -> None:
             open_note(page, "Wifi thuis")
             page.get_by_role("button", name="Lezen").click()
             expect(page.locator(".preview .secret")).to_have_text("geheim-wifi")
+            open_note(page, "Proxmox herstel")
+            expect(page.locator(".preview img.note-img")).to_have_count(2, timeout=15_000)
 
             audit = page.request.get(f"{ui}/api/v1/audit", params={"action": "vault.", "limit": 100}).json()[
                 "items"
@@ -342,6 +392,7 @@ def main() -> None:
             assert ("vault.note.import", "success") in pairs and ("vault.note.trash", "success") in pairs, (
                 pairs
             )
+            assert ("vault.note.file.upload", "success") in pairs, pairs
             assert not errors, errors
             browser.close()
         step("OK: notities werken end-to-end en de server ziet enkel versleutelde tekst")

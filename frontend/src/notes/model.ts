@@ -139,6 +139,9 @@ export interface WikiLink {
 
 export const WIKILINK_RE = /(!?)\[\[([^\][\n]+?)\]\]/g;
 
+/** Lijkt dit doel van een link op een bijlage (foto.png, plan.pdf) en niet op een notitie? */
+export const looksLikeFile = (target: string) => /\.[a-z][a-z0-9]{0,4}$/i.test(target) && !/\.(md|markdown)$/i.test(target);
+
 export function parseLinkInner(inner: string): Pick<WikiLink, "target" | "heading" | "alias"> {
   const [left, alias] = inner.split("|", 2);
   const hash = left.indexOf("#");
@@ -257,6 +260,7 @@ export function buildIndex(all: Note[]): NoteIndex {
       if (!l.target || isAppLink(l.target)) continue;
       const to = resolve(l.target);
       if (!to) {
+        if (looksLikeFile(l.target)) continue;
         const key = l.target;
         if (!unresolved.has(key)) unresolved.set(key, []);
         if (!unresolved.get(key)!.includes(n)) unresolved.get(key)!.push(n);

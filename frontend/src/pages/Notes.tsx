@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import type { Application, VaultStatus } from "../api/types";
 import { Card, ErrorBox, Loading, PageHeader } from "../components/ui";
 import { Editor, type EditorHandle, type Suggestion } from "../notes/Editor";
+import { baseName, isImage, mimeOf, useNoteFiles, type NoteFile } from "../notes/files";
 import { GraphView } from "../notes/Graph";
 import { download, exportZip, planImport, type ImportPlan } from "../notes/importExport";
 import { renderNote, type AppRef, type RenderContext } from "../notes/markdown";
@@ -29,7 +30,17 @@ import {
   type Note,
   type NoteDoc,
 } from "../notes/model";
-import { FileTree, HistoryModal, MetaPanel, PropertiesTable, QuickSwitcher, SearchResults, TagList, TrashView } from "../notes/panels";
+import {
+  AttachmentList,
+  FileTree,
+  HistoryModal,
+  MetaPanel,
+  PropertiesTable,
+  QuickSwitcher,
+  SearchResults,
+  TagList,
+  TrashView,
+} from "../notes/panels";
 import { AUTO_LOCK_MINUTES, useVaultKey } from "../notes/session";
 import { useNotesStore, type NoteVersion } from "../notes/store";
 import type { UserKey } from "../vault/crypto";
@@ -159,6 +170,7 @@ const DAILY_DEFAULT = `# {{date}}
 
 function Workspace({ userKey }: { userKey: UserKey }) {
   const store = useNotesStore(userKey);
+  const files = useNoteFiles(userKey);
   const { lock } = useVaultKey();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -166,7 +178,7 @@ function Workspace({ userKey }: { userKey: UserKey }) {
   const [view, setView] = useState<View>("note");
   const [mode, setModeState] = useState<Mode>(storedMode);
   const [query, setQuery] = useState("");
-  const [sideTab, setSideTab] = useState<"files" | "tags">("files");
+  const [sideTab, setSideTab] = useState<"files" | "tags" | "attachments">("files");
   const [switcher, setSwitcher] = useState(false);
   const [history, setHistory] = useState(false);
   const [menu, setMenu] = useState(false);
@@ -193,7 +205,12 @@ function Workspace({ userKey }: { userKey: UserKey }) {
     () => (catalog.data ?? []).map((a) => ({ name: a.name, url: a.url, href: `/catalog/${a.organization_id}/${a.id}` })),
     [catalog.data],
   );
-  const ctx: RenderContext = useMemo(() => ({ index, apps }), [index, apps]);
+  const { find: findFile, dataUrl, request: requestFile, broken: brokenFile, loaded: filesLoaded } = files;
+  const ctx: RenderContext = useMemo(
+    () => ({ index, apps, files: { find: findFile, dataUrl, request: requestFile, broken: brokenFile } }),
+    // filesLoaded: opnieuw renderen zodra een afbeelding ontsleuteld is
+    [index, apps, findFile, dataUrl, requestFile, brokenFile, filesLoaded],
+  );
 
   const flash = useCallback((msg: string) => {
     setToast(msg);
@@ -425,11 +442,11 @@ function Workspace({ userKey }: { userKey: UserKey }) {
     setConflict(null);
   };
 
-  const startImport = (files: FileList | null) =>
-    files &&
+  const startImport = (list: FileList | null) =>
+    list &&
     run(async () => {
       setMenu(false);
-      setImportPlan(await planImport([...files], index));
+      setImportPlan(await planImport([...list], index, (files.files ?? []).map((f) => f.name), files.usage.max));
     });
 
   const doImport = () =>
@@ -437,8 +454,16 @@ function Workspace({ userKey }: { userKey: UserKey }) {
     run(async () => {
       setImporting(0);
       try {
-        const created = await store.importMany(importPlan.docs, setImporting);
-        flash(`${created.length} notities geïmporteerd.`);
+        let done = 0;
+        for (const a of importPlan.attachments) {
+          await files.upload(a.file, a.name);
+          setImporting(++done);
+        }
+        const created = await store.importMany(importPlan.docs, (k) => setImporting(done + k));
+        const n = importPlan.attachments.length;
+        flash(
+          `${created.length} notities${n ? ` en ${n} ${n === 1 ? "bijlage" : "bijlagen"}` : ""} geïmporteerd.`,
+        );
         setImportPlan(null);
       } finally {
         setImporting(null);
@@ -447,8 +472,46 @@ function Workspace({ userKey }: { userKey: UserKey }) {
 
   const doExport = () => {
     setMenu(false);
-    if (!confirm("De export is NIET versleuteld: iedereen met het zip-bestand kan je notities lezen. Doorgaan?")) return;
-    download(exportZip(all));
+    if (!confirm("De export is NIET versleuteld: iedereen met het zip-bestand kan je notities en bijlagen lezen. Doorgaan?")) return;
+    void run(async () => {
+      const attachments = [];
+      for (const f of files.files ?? []) attachments.push({ name: f.name, data: await files.bytes(f.id) });
+      download(exportZip(all, attachments));
+    });
+  };
+
+  // ------------------------------------------------------------ bijlagen
+
+  const [uploading, setUploading] = useState(0);
+
+  /** Versleutelt en bewaart bestanden en zet er een ![[link]] naar op de cursor. */
+  const attach = (list: File[]) =>
+    void run(async () => {
+      setUploading((n) => n + list.length);
+      const links: string[] = [];
+      try {
+        for (const f of list) {
+          // Een geplakte schermafbeelding heet gewoon "image.png": geef ze een naam zoals Obsidian.
+          const name = /^image\.(png|jpe?g|gif|webp)$/i.test(f.name)
+            ? `Geplakte afbeelding ${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}.${f.name.split(".").pop()}`
+            : f.name.replace(/[\\/[\]|#^]/g, "-");
+          const saved = await files.upload(f, name);
+          links.push(`![[${saved.name}]]`);
+          setUploading((n) => n - 1);
+        }
+      } finally {
+        setUploading(0);
+        if (links.length) editor.current?.insert(links.join("\n"));
+      }
+    });
+
+  const downloadFile = (f: NoteFile) =>
+    void run(async () => download(new Blob([await files.bytes(f.id)], { type: mimeOf(f.name) }), baseName(f.name)));
+
+  const deleteFile = (f: NoteFile, usedIn: Note[]) => {
+    const where = usedIn.length ? `\nGebruikt in: ${usedIn.map((n) => n.title).join(", ")}.` : "";
+    if (!confirm(`Bijlage "${f.name}" definitief verwijderen?${where}`)) return;
+    void run(() => files.remove(f.id));
   };
 
   // ------------------------------------------------------------ sneltoetsen
@@ -500,6 +563,12 @@ function Workspace({ userKey }: { userKey: UserKey }) {
       if (a.dataset.new) void run(() => createNote(a.dataset.new!, "", ""));
       return;
     }
+    if (a?.classList.contains("file-link")) {
+      e.preventDefault();
+      const f = files.files?.find((x) => x.id === a.dataset.file);
+      if (f) downloadFile(f);
+      return;
+    }
     if (a?.classList.contains("tag")) {
       e.preventDefault();
       setQuery(`#${a.dataset.tag}`);
@@ -520,8 +589,9 @@ function Workspace({ userKey }: { userKey: UserKey }) {
     () => [
       ...index.notes.map((n) => ({ insert: n.title, label: n.title, hint: n.folder || undefined })),
       ...apps.map((a) => ({ insert: `app:${a.name}`, label: a.name, hint: "app uit de catalogus" })),
+      ...(files.files ?? []).map((f) => ({ insert: f.name, label: f.name, hint: isImage(f.name) ? "afbeelding" : "bijlage" })),
     ],
-    [index, apps],
+    [index, apps, files.files],
   );
 
   // ------------------------------------------------------------ weergave
@@ -604,17 +674,30 @@ function Workspace({ userKey }: { userKey: UserKey }) {
               </div>
             )}
             <div className="side-tabs">
-              <button className={sideTab === "files" ? "active" : undefined} onClick={() => setSideTab("files")}>
-                Bestanden <span className="count">{index.notes.length}</span>
+              <button className={sideTab === "files" ? "active" : undefined} onClick={() => setSideTab("files")} title={`${index.notes.length} notities`}>
+                Bestanden
               </button>
-              <button className={sideTab === "tags" ? "active" : undefined} onClick={() => setSideTab("tags")}>
-                Tags <span className="count">{index.tags.size}</span>
+              <button className={sideTab === "tags" ? "active" : undefined} onClick={() => setSideTab("tags")} title={`${index.tags.size} tags`}>
+                Tags
+              </button>
+              <button className={sideTab === "attachments" ? "active" : undefined} onClick={() => setSideTab("attachments")} title={`${files.files?.length ?? 0} bijlagen`}>
+                Bijlagen
               </button>
             </div>
             {sideTab === "files" ? (
               <FileTree index={index} currentId={currentId} onOpen={openNote} onMove={moveNote} />
-            ) : (
+            ) : sideTab === "tags" ? (
               <TagList index={index} onTag={(t) => setQuery(`#${t}`)} />
+            ) : (
+              <AttachmentList
+                files={files.files}
+                usage={files.usage}
+                index={index}
+                onInsert={current && mode !== "read" ? (f) => editor.current?.insert(`![[${f.name}]]`) : undefined}
+                onDownload={downloadFile}
+                onDelete={deleteFile}
+                onOpen={openNote}
+              />
             )}
           </>
         )}
@@ -739,6 +822,19 @@ function Workspace({ userKey }: { userKey: UserKey }) {
                 <button onClick={() => editor.current?.wrap("||")} title="Geheim: wazig tot je klikt">
                   Geheim
                 </button>
+                <label className="md-toolbar-file" title="Bijlage toevoegen (of plak/sleep een bestand in de tekst)">
+                  {uploading ? `Opladen… (${uploading})` : "Bijlage"}
+                  <input
+                    type="file"
+                    multiple
+                    hidden
+                    onChange={(e) => {
+                      const list = [...(e.target.files ?? [])];
+                      e.target.value = "";
+                      if (list.length) attach(list);
+                    }}
+                  />
+                </label>
                 {templates.length > 0 && (
                   <select
                     value=""
@@ -765,7 +861,8 @@ function Workspace({ userKey }: { userKey: UserKey }) {
                   onChange={(body) => edit({ body })}
                   suggestions={suggestions}
                   onSaveNow={() => void flush()}
-                  placeholder="Schrijf in Markdown. [[ voor een link, # voor een tag."
+                  onFiles={attach}
+                  placeholder="Schrijf in Markdown. [[ voor een link, # voor een tag. Plak of sleep een afbeelding om ze toe te voegen."
                 />
               )}
               {mode !== "edit" && rendered && (
@@ -857,8 +954,9 @@ function ImportDialog({
       <div className="modal-card">
         <h2>Importeren</h2>
         <p>
-          {plan.docs.length} {plan.docs.length === 1 ? "notitie wordt" : "notities worden"} in je browser versleuteld en
-          toegevoegd.
+          {plan.docs.length} {plan.docs.length === 1 ? "notitie" : "notities"}
+          {plan.attachments.length > 0 && ` en ${plan.attachments.length} ${plan.attachments.length === 1 ? "bijlage" : "bijlagen"}`}{" "}
+          worden in je browser versleuteld en toegevoegd.
         </p>
         {plan.skipped.length > 0 && (
           <details>
@@ -876,8 +974,12 @@ function ImportDialog({
           <button className="btn" onClick={onCancel} disabled={progress !== null}>
             Annuleren
           </button>
-          <button className="btn btn-primary" onClick={onConfirm} disabled={!plan.docs.length || progress !== null}>
-            {progress !== null ? `Bezig… ${progress}/${plan.docs.length}` : "Importeren"}
+          <button
+            className="btn btn-primary"
+            onClick={onConfirm}
+            disabled={!(plan.docs.length + plan.attachments.length) || progress !== null}
+          >
+            {progress !== null ? `Bezig… ${progress}/${plan.docs.length + plan.attachments.length}` : "Importeren"}
           </button>
         </div>
       </div>

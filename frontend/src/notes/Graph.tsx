@@ -2,7 +2,7 @@
 // force-layout in de browser; slepen om te schuiven, scrollen om te zoomen.
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
-import { isAppLink, type NoteIndex } from "./model";
+import { isAppLink, looksLikeFile, type NoteIndex } from "./model";
 
 interface GNode {
   id: string;
@@ -144,7 +144,7 @@ export function GraphView({
         if (!l.target || isAppLink(l.target)) continue;
         const t = index.resolve(l.target);
         if (t && ids.has(t.id)) link(from, ids.get(t.id)!);
-        else if (!t && opts.ghosts) link(from, add(`ghost:${l.target.toLowerCase()}`, l.target, "ghost"));
+        else if (!t && opts.ghosts && !looksLikeFile(l.target)) link(from, add(`ghost:${l.target.toLowerCase()}`, l.target, "ghost"));
       }
       if (opts.tags) for (const tag of index.tagsOf.get(n.id) ?? []) link(from, add(`tag:${tag}`, `#${tag}`, "tag"));
     }

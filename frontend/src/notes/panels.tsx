@@ -22,6 +22,7 @@ import {
   type Properties,
 } from "./model";
 import type { NoteVersion } from "./store";
+import { baseName, formatSize, isImage, type NoteFile } from "./files";
 
 // ---------------------------------------------------------------- bestandsboom
 
@@ -145,6 +146,94 @@ export function TagList({ index, onTag }: { index: NoteIndex; onTag: (t: string)
         </li>
       ))}
     </ul>
+  );
+}
+
+// ---------------------------------------------------------------- bijlagen
+
+/** Notities die naar een bijlage verwijzen (op naam of bestandsnaam, zoals Obsidian). */
+export function notesUsing(index: NoteIndex, f: NoteFile): Note[] {
+  const names = [f.name.toLowerCase(), baseName(f.name).toLowerCase()];
+  return index.notes.filter((n) => {
+    const body = n.body.toLowerCase();
+    return names.some((x) => body.includes(`[[${x}`) || body.includes(`](${x}`) || body.includes(`](${encodeURI(x)}`));
+  });
+}
+
+export function AttachmentList({
+  files,
+  usage,
+  index,
+  onInsert,
+  onDownload,
+  onDelete,
+  onOpen,
+}: {
+  files: NoteFile[] | null;
+  usage: { used: number; quota: number };
+  index: NoteIndex;
+  onInsert?: (f: NoteFile) => void;
+  onDownload: (f: NoteFile) => void;
+  onDelete: (f: NoteFile, usedIn: Note[]) => void;
+  onOpen: (id: string) => void;
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+  if (!files) return <Loading />;
+  const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, "nl"));
+  return (
+    <div className="attachments">
+      <p className="muted small pad">
+        {formatSize(usage.used)} van {formatSize(usage.quota)} gebruikt. Plak of sleep een bestand in een notitie om het toe te
+        voegen.
+      </p>
+      {!sorted.length && <p className="muted small pad">Nog geen bijlagen.</p>}
+      <ul className="tree">
+        {sorted.map((f) => {
+          const used = notesUsing(index, f);
+          return (
+            <li key={f.id} className="attachment">
+              <button className="tree-item" onClick={() => setOpen(open === f.id ? null : f.id)} title={f.name}>
+                <span className="attachment-name">
+                  {isImage(f.name) ? "🖼" : "📎"} {f.name}
+                </span>
+                <span className="count" title="Gebruikt in zoveel notities">
+                  {used.length}
+                </span>
+              </button>
+              {open === f.id && (
+                <div className="attachment-detail small">
+                  <div className="muted">{formatSize(f.size)}</div>
+                  {used.length > 0 && (
+                    <ul>
+                      {used.map((n) => (
+                        <li key={n.id}>
+                          <a className="wikilink" onClick={() => onOpen(n.id)}>
+                            {n.title}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="row wrap">
+                    {onInsert && (
+                      <button className="btn btn-ghost small" onClick={() => onInsert(f)}>
+                        Invoegen
+                      </button>
+                    )}
+                    <button className="btn btn-ghost small" onClick={() => onDownload(f)}>
+                      Downloaden
+                    </button>
+                    <button className="btn btn-ghost small btn-danger-text" onClick={() => onDelete(f, used)}>
+                      Verwijderen
+                    </button>
+                  </div>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 

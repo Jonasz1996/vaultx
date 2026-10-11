@@ -14,6 +14,7 @@ import {
   type NoteIndex,
   type Properties,
 } from "./model";
+import { formatSize, isImage, looksLikeFile, type FileResolver } from "./files";
 
 export interface AppRef {
   name: string;
@@ -24,6 +25,8 @@ export interface AppRef {
 export interface RenderContext {
   index: NoteIndex;
   apps: AppRef[];
+  /** Bijlagen; zonder resolver worden ze als ontbrekend getoond (bv. in de versiegeschiedenis). */
+  files?: FileResolver;
   /** Diepte van ingesloten notities; stopt bij 2 (en bij lussen). */
   depth?: number;
   trail?: string[];
@@ -70,6 +73,29 @@ function calloutTone(type: string): string {
   return "info";
 }
 
+/** Breedte uit Obsidian-syntax: ![[foto.png|300]] of ![[foto.png|300x200]]. */
+function widthAttr(alias: string | null | undefined): string {
+  const m = /^(\d{1,4})(?:x(\d{1,4}))?$/.exec(alias?.trim() ?? "");
+  return m ? ` width="${m[1]}"${m[2] ? ` height="${m[2]}"` : ""}` : "";
+}
+
+function fileHtml(target: string, ctx: RenderContext, embed: boolean, alias?: string | null): string | null {
+  const f = ctx.files?.find(target);
+  if (!f) {
+    if (!looksLikeFile(target)) return null;
+    return `<span class="embed-missing">Bijlage ${esc(target)} niet gevonden.</span>`;
+  }
+  if (embed && isImage(f.name)) {
+    const url = ctx.files!.dataUrl(f.id);
+    if (url) return `<img class="note-img" src="${esc(url)}" alt="${esc(alias && !widthAttr(alias) ? alias : f.name)}"${widthAttr(alias)}>`;
+    if (ctx.files!.broken(f.id)) return `<span class="embed-missing">Afbeelding ${esc(f.name)} kon niet ontsleuteld worden.</span>`;
+    ctx.files!.request(f.id);
+    return `<span class="file-loading">Afbeelding ${esc(f.name)} ontsleutelen…</span>`;
+  }
+  const label = alias && !widthAttr(alias) ? alias : f.name;
+  return `<a class="file-link" data-file="${esc(f.id)}" title="Ontsleutelen en downloaden (${esc(formatSize(f.size))})">📎 ${esc(label)}</a>`;
+}
+
 function linkHtml(inner: string, ctx: RenderContext): string {
   const { target, heading, alias } = parseLinkInner(inner);
   const label = esc(alias ?? (heading && target ? `${target} › ${heading}` : heading ?? target));
@@ -79,6 +105,10 @@ function linkHtml(inner: string, ctx: RenderContext): string {
     if (!app) return `<span class="wikilink unresolved" title="Niet in de catalogus">${esc(alias ?? name)}</span>`;
     return `<a class="wikilink app-link" href="${esc(app.href)}" data-app="1">${esc(alias ?? app.name)}</a>`;
   }
+  if (target && !ctx.index.resolve(target)) {
+    const file = fileHtml(target, ctx, false, alias);
+    if (file) return file;
+  }
   if (!target && heading) return `<a class="wikilink" data-heading="${esc(slug(heading))}">${label}</a>`;
   const note = ctx.index.resolve(target);
   if (!note) return `<a class="wikilink unresolved" data-new="${esc(target)}" title="Bestaat nog niet: klik om aan te maken">${label}</a>`;
@@ -86,10 +116,12 @@ function linkHtml(inner: string, ctx: RenderContext): string {
 }
 
 function embedHtml(inner: string, ctx: RenderContext): string {
-  const { target, heading } = parseLinkInner(inner);
-  if (/\.(png|jpe?g|gif|webp|svg|pdf|mp3|mp4|webm)$/i.test(target))
-    return `<span class="embed-missing">Bijlage ${esc(target)}: bijlagen in notities volgen in een latere fase.</span>`;
+  const { target, heading, alias } = parseLinkInner(inner);
   const note = ctx.index.resolve(target);
+  if (!note) {
+    const file = fileHtml(target, ctx, true, alias);
+    if (file) return file;
+  }
   if (!note) return linkHtml(inner, ctx);
   const trail = ctx.trail ?? [];
   if ((ctx.depth ?? 0) >= 2 || trail.includes(note.id)) return linkHtml(inner, ctx);
@@ -188,7 +220,17 @@ function makeMarked(ctx: RenderContext): Marked {
         return `<a href="${esc(href)}"${title ? ` title="${esc(title)}"` : ""}${external ? ' target="_blank" rel="noopener noreferrer"' : ""}>${text}</a>`;
       },
       image({ href, text }) {
-        // De CSP van VaultX laadt geen externe afbeeldingen (geen lekken naar derden).
+        // Enkel eigen bijlagen. De CSP van VaultX laadt geen externe afbeeldingen (geen lekken naar derden).
+        if (!/^[a-z]+:/i.test(href)) {
+          let name = href;
+          try {
+            name = decodeURIComponent(href);
+          } catch {
+            /* geen geldige URL-codering: naam zoals hij is */
+          }
+          const file = fileHtml(name, ctx, true, text);
+          if (file) return file;
+        }
         return `<span class="embed-missing">Afbeelding ${esc(text || href)} wordt niet geladen.</span>`;
       },
       blockquote({ tokens }) {

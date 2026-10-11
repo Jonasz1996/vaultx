@@ -14,10 +14,16 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, NotFoundError
-from app.models import VaultAccount, VaultNote, VaultNoteVersion
-from app.repositories import VaultAccountRepository, VaultNoteRepository, VaultNoteVersionRepository
+from app.core.errors import ConflictError, InvalidOperationError, NotFoundError
+from app.models import VaultAccount, VaultNote, VaultNoteFile, VaultNoteVersion
+from app.repositories import (
+    VaultAccountRepository,
+    VaultNoteFileRepository,
+    VaultNoteRepository,
+    VaultNoteVersionRepository,
+)
 from app.schemas.notes import NoteContent
+from app.schemas.vault import ENC_STRING_TYPE2
 from app.services.audit import AuditService
 from app.services.principal import Principal
 
@@ -25,6 +31,21 @@ from app.services.principal import Principal
 # tijdens het typen elke seconde), en niet meer dan zoveel versies per notitie.
 VERSION_INTERVAL = timedelta(minutes=10)
 MAX_VERSIONS = 50
+
+# EncArrayBuffer: type (1) + IV (16) + MAC (32) + minstens één AES-blok.
+ENC_FILE_HEADER = 1 + 16 + 32
+MAX_FILE_NAME = 2048
+
+
+def check_enc_file(data: bytes) -> None:
+    """Weigert alles wat geen EncArrayBuffer van type 2 is (dus ook onversleutelde bestanden)."""
+    if len(data) < ENC_FILE_HEADER + 16 or data[0] != 2 or (len(data) - ENC_FILE_HEADER) % 16:
+        raise InvalidOperationError("Verwacht een versleuteld bestand (EncArrayBuffer type 2)")
+
+
+def check_enc_name(name: str) -> None:
+    if len(name) > MAX_FILE_NAME or not ENC_STRING_TYPE2.match(name):
+        raise InvalidOperationError("Verwacht een versleutelde bestandsnaam (EncString type 2)")
 
 
 class StaleNoteError(ConflictError):
@@ -41,6 +62,7 @@ class NotesService:
         self.accounts = VaultAccountRepository(db)
         self.notes = VaultNoteRepository(db)
         self.versions = VaultNoteVersionRepository(db)
+        self.files = VaultNoteFileRepository(db)
         self.audit = AuditService(db)
 
     async def _account(self, p: Principal) -> VaultAccount:
@@ -132,3 +154,54 @@ class NotesService:
     async def history(self, p: Principal, note_id: UUID) -> list[VaultNoteVersion]:
         note = await self._note(p, note_id)
         return await self.versions.for_note(note.id)
+
+    # Bijlagen
+
+    async def list_files(self, p: Principal) -> tuple[list[VaultNoteFile], int]:
+        account = await self._account(p)
+        return await self.files.for_user(account.user_id), await self.files.usage(account.user_id)
+
+    async def upload(self, p: Principal, name: str, data: bytes, quota_bytes: int) -> VaultNoteFile:
+        check_enc_name(name)
+        check_enc_file(data)
+        # Rijlock op het account: twee gelijktijdige uploads gaan samen niet over het quotum.
+        account = await self.accounts.lock(p.user.id)
+        if account is None:
+            raise NotFoundError("Activeer eerst je kluis op de pagina Mijn kluis")
+        if await self.files.usage(account.user_id) + len(data) > quota_bytes:
+            raise InvalidOperationError(
+                "Je opslag voor bijlagen is vol; verwijder eerst ongebruikte bijlagen"
+            )
+        f = self.files.add(
+            VaultNoteFile(
+                user_id=account.user_id, name=name, size=len(data), data=data, created_at=datetime.now(UTC)
+            )
+        )
+        await self.db.flush()
+        await self.audit.record(
+            "vault.note.file.upload",
+            p.actor,
+            target_type="vault_note_file",
+            target_id=f.id,
+            details={"size": len(data)},
+        )
+        await self.db.commit()
+        return f
+
+    async def file(self, p: Principal, file_id: UUID) -> VaultNoteFile:
+        account = await self._account(p)
+        f = await self.files.owned(account.user_id, file_id, with_data=True)
+        if f is None:
+            raise NotFoundError("Bijlage niet gevonden")
+        return f
+
+    async def delete_file(self, p: Principal, file_id: UUID) -> None:
+        account = await self._account(p)
+        f = await self.files.owned(account.user_id, file_id)
+        if f is None:
+            raise NotFoundError("Bijlage niet gevonden")
+        await self.audit.record(
+            "vault.note.file.delete", p.actor, target_type="vault_note_file", target_id=f.id
+        )
+        await self.files.delete(f)
+        await self.db.commit()

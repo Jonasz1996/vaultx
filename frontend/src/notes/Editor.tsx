@@ -1,6 +1,6 @@
 // Markdown-editor: een textarea met de handigste Obsidian-gewoontes. [[ geeft suggesties
 // van notities en catalogus-apps, Enter zet lijsten voort, Tab springt in, Ctrl+B/I maakt
-// vet/cursief.
+// vet/cursief, plakken of slepen van bestanden maakt er versleutelde bijlagen van.
 
 import { forwardRef, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { fuzzyScore } from "./model";
@@ -24,6 +24,8 @@ interface Props {
   onChange: (v: string) => void;
   suggestions: Suggestion[];
   onSaveNow?: () => void;
+  /** Geplakte of gesleepte bestanden (worden bijlagen). */
+  onFiles?: (files: File[]) => void;
   placeholder?: string;
 }
 
@@ -50,7 +52,7 @@ function caretPosition(el: HTMLTextAreaElement, pos: number): { top: number; lef
   return out;
 }
 
-export const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange, suggestions, onSaveNow, placeholder }, ref) {
+export const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange, suggestions, onSaveNow, onFiles, placeholder }, ref) {
   const ta = useRef<HTMLTextAreaElement>(null);
   const [query, setQuery] = useState<{ text: string; start: number; top: number; left: number } | null>(null);
   const [active, setActive] = useState(0);
@@ -197,6 +199,27 @@ export const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, o
           requestAnimationFrame(updateQuery);
         }}
         onKeyDown={onKeyDown}
+        onPaste={(e) => {
+          const files = [...e.clipboardData.files];
+          if (!files.length || !onFiles) return;
+          e.preventDefault();
+          onFiles(files);
+        }}
+        onDragOver={(e) => {
+          if (onFiles && e.dataTransfer.types.includes("Files")) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const files = [...e.dataTransfer.files];
+          if (!files.length || !onFiles) return;
+          e.preventDefault();
+          // Cursor op de plek waar losgelaten werd, zodat de link daar terechtkomt.
+          const el = e.currentTarget;
+          const doc = document as Document & { caretPositionFromPoint?: (x: number, y: number) => { offset: number } | null };
+          const pos = doc.caretPositionFromPoint?.(e.clientX, e.clientY);
+          if (pos && pos.offset <= el.value.length) el.setSelectionRange(pos.offset, pos.offset);
+          el.focus();
+          onFiles(files);
+        }}
         onKeyUp={(e) => {
           if (e.key === "ArrowLeft" || e.key === "ArrowRight") updateQuery();
         }}

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from datetime import timedelta
 
+from app.core.config import get_settings
 from app.services import notes as notes_service
 from tests.bw_crypto import unwrap_user_key
 from tests.test_vault import bearer, enroll
@@ -185,3 +187,79 @@ async def test_import_and_reset_removes_notes(make_client):
     assert (await c.delete_("/api/v1/me/vault")).status_code == 204
     account = await enroll(c, "jonas")
     assert (await c.get("/api/v1/me/notes")).json() == []
+
+
+def enc_file(account, data: bytes) -> bytes:
+    """EncArrayBuffer zoals de browser hem maakt: type 2 + IV + MAC + ciphertext."""
+    s = account.enc_bytes(data)
+    iv, ct, mac = (base64.b64decode(x) for x in s[2:].split("|"))
+    return bytes([2]) + iv + mac + ct
+
+
+async def upload(c, account, name: str, blob: bytes):
+    headers = {**c.mutating_headers(), "Content-Type": "application/octet-stream"}
+    headers["X-VaultX-File-Name"] = account.enc(name)
+    return await c.post("/api/v1/me/notes/files", content=blob, headers=headers)
+
+
+async def test_files_upload_download_quota_and_isolation(make_client, admin, monkeypatch):
+    c = await make_client()
+    account = await enroll(c, "jonas")
+    picture = b"\x89PNG" + bytes(range(256)) * 40
+    blob = enc_file(account, picture)
+
+    r = await upload(c, account, "schema.png", blob)
+    assert r.status_code == 201, r.text
+    f = r.json()
+    assert account.dec(f["name"]) == "schema.png" and f["size"] == len(blob)
+
+    listing = (await c.get("/api/v1/me/notes/files")).json()
+    assert [x["id"] for x in listing["files"]] == [f["id"]]
+    assert listing["used_bytes"] == len(blob) and listing["max_file_bytes"] == 25 * 1024 * 1024
+
+    r = await c.get(f"/api/v1/me/notes/files/{f['id']}")
+    assert r.status_code == 200 and r.content == blob
+    assert "immutable" in r.headers["cache-control"]
+
+    # Onversleutelde inhoud of naam wordt geweigerd
+    assert (await upload(c, account, "x.png", picture)).status_code == 422
+    headers = {**c.mutating_headers(), "X-VaultX-File-Name": "klare-naam.png"}
+    assert (await c.post("/api/v1/me/notes/files", content=blob, headers=headers)).status_code == 422
+    # Zonder CSRF-header geweigerd
+    r = await c.post("/api/v1/me/notes/files", content=blob, headers={"X-VaultX-File-Name": account.enc("x")})
+    assert r.status_code == 403
+
+    # Te groot en quotum vol
+    settings = get_settings()
+    monkeypatch.setattr(settings, "vault_note_file_max_mb", 1)
+    big = enc_file(account, b"x" * (1024 * 1024 + 100))
+    assert (await upload(c, account, "groot.bin", big)).status_code == 413
+    monkeypatch.setattr(settings, "vault_note_storage_mb", 1)
+    almost = enc_file(account, b"y" * (1024 * 1024 - 1000))
+    r = await upload(c, account, "vol.bin", almost)
+    assert r.status_code == 422 and "vol" in r.json()["detail"]
+
+    # Andere gebruiker ziet en raakt niets
+    other = await make_client()
+    await enroll(other, "eve")
+    assert (await other.get("/api/v1/me/notes/files")).json()["files"] == []
+    assert (await other.get(f"/api/v1/me/notes/files/{f['id']}")).status_code == 404
+    assert (await other.delete_(f"/api/v1/me/notes/files/{f['id']}")).status_code == 404
+
+    assert (await c.delete_(f"/api/v1/me/notes/files/{f['id']}")).status_code == 204
+    assert (await c.get(f"/api/v1/me/notes/files/{f['id']}")).status_code == 404
+
+    actions = sorted(
+        e["action"]
+        for e in (await admin.get("/api/v1/audit", params={"action": "vault.note.file"})).json()["items"]
+    )
+    assert actions == ["vault.note.file.delete", "vault.note.file.upload"]
+
+
+async def test_files_removed_with_vault(make_client):
+    c = await make_client()
+    account = await enroll(c, "jonas")
+    assert (await upload(c, account, "a.txt", enc_file(account, b"hallo"))).status_code == 201
+    assert (await c.delete_("/api/v1/me/vault")).status_code == 204
+    await enroll(c, "jonas")
+    assert (await c.get("/api/v1/me/notes/files")).json()["files"] == []
