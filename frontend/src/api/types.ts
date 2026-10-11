@@ -439,12 +439,46 @@ export interface VaultStatus {
   kdf_iterations: number | null;
   kdf_memory: number | null;
   kdf_parallelism: number | null;
+  kdf_salt: string | null;
   enrolled_at: string | null;
   revision_date: string | null;
   item_count: number;
   trash_count: number;
   folder_count: number;
+  note_count: number;
   devices: VaultDevice[];
+}
+
+// ---------------------------------------------------------------- notities (fase 7)
+
+/** Zoals de server een notitie bewaart: `content` is versleuteld. */
+export interface EncryptedNote {
+  id: string;
+  content: string;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface EncryptedNoteFile {
+  id: string;
+  name: string;
+  size: number;
+  created_at: string;
+}
+
+export interface EncryptedNoteFiles {
+  files: EncryptedNoteFile[];
+  used_bytes: number;
+  quota_bytes: number;
+  max_file_bytes: number;
+}
+
+export interface EncryptedNoteVersion {
+  revision: number;
+  content: string;
+  saved_at: string;
 }
 
 // ---------------------------------------------------------------- app publiceren (fase 6)

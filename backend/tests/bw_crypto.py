@@ -72,6 +72,9 @@ class Account:
     def enc(self, text: str) -> str:
         return encrypt(text.encode(), self.user_key[:32], self.user_key[32:])
 
+    def enc_bytes(self, data: bytes) -> str:
+        return encrypt(data, self.user_key[:32], self.user_key[32:])
+
     def dec(self, enc_string: str) -> str:
         return decrypt(enc_string, self.user_key[:32], self.user_key[32:]).decode()
 

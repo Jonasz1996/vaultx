@@ -4,7 +4,7 @@ from fastapi import APIRouter, Response, status
 
 from app.api.deps import CurrentPrincipal, DbSession, SettingsDep
 from app.core.errors import NotFoundError
-from app.schemas.vault import VaultDeviceOut, VaultEnroll, VaultStatusOut
+from app.schemas.vault import VaultDeviceOut, VaultEnroll, VaultStatusOut, VaultUnlock, VaultUnlockOut
 from app.services.vault import VaultService
 from app.services.vault_auth import device_type_name
 
@@ -29,11 +29,13 @@ async def _status(p: CurrentPrincipal, db: DbSession, settings: SettingsDep) -> 
         kdf_iterations=a.kdf_iterations if a else None,
         kdf_memory=a.kdf_memory if a else None,
         kdf_parallelism=a.kdf_parallelism if a else None,
+        kdf_salt=a.kdf_salt if a else None,
         enrolled_at=a.created_at if a else None,
         revision_date=a.revision_date if a else None,
         item_count=st.item_count,
         trash_count=st.trash_count,
         folder_count=st.folder_count,
+        note_count=st.note_count,
         devices=[_device_out(d) for d in st.devices],
     )
 
@@ -56,6 +58,20 @@ async def enroll(
         raise NotFoundError("De kluis is uitgeschakeld op deze server")
     await VaultService(db).enroll(p, body)
     return await _status(p, db, settings)
+
+
+@router.post(
+    "/unlock",
+    response_model=VaultUnlockOut,
+    summary="Kluis ontgrendelen in de browser (versleutelde user key na controle master password)",
+)
+async def unlock(
+    body: VaultUnlock, p: CurrentPrincipal, db: DbSession, settings: SettingsDep
+) -> VaultUnlockOut:
+    if not settings.vault_enabled:
+        raise NotFoundError("De kluis is uitgeschakeld op deze server")
+    account = await VaultService(db).unlock(p, body.master_password_hash, settings)
+    return VaultUnlockOut(user_key=account.user_key)
 
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT, summary="Kluis met alle items verwijderen")

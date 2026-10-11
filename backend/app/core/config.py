@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     # Na zoveel foute master passwords na elkaar wordt het account tijdelijk vergrendeld.
     vault_max_failed_logins: int = Field(10, ge=1)
     vault_lockout_minutes: int = Field(15, ge=1)
+    # Bijlagen in notities (fase 7): maximale grootte per bestand en totaal per gebruiker.
+    # Hou client_max_body_size in nginx voor /api/v1/me/notes minstens even groot.
+    vault_note_file_max_mb: int = Field(25, ge=1, le=512)
+    vault_note_storage_mb: int = Field(1024, ge=1)
 
     @field_validator("oidc_admin_groups", mode="before")
     @classmethod
