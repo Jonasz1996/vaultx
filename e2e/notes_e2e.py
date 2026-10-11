@@ -279,7 +279,24 @@ def main() -> None:
             step("Versiegeschiedenis")
             open_note(page, "Proxmox herstel")
             page.get_by_role("button", name="Geschiedenis").click()
-            expect(page.locator(".history-list li")).to_have_count(1)
+            try:
+                expect(page.locator(".history-list li")).to_have_count(1)
+            except AssertionError:
+                shot(page, "fout-geschiedenis")
+                print("dialoog:", page.locator("dialog[open]").all_inner_texts())
+                print(
+                    "versies:",
+                    page.request.get(f"{ui}/api/v1/me/notes").json()
+                    and [
+                        (
+                            n["id"],
+                            n["revision"],
+                            len(page.request.get(f"{ui}/api/v1/me/notes/{n['id']}/versions").json()),
+                        )
+                        for n in page.request.get(f"{ui}/api/v1/me/notes").json()
+                    ],
+                )
+                raise
             shot(page, "06-geschiedenis")
             page.keyboard.press("Escape")
 
