@@ -1,9 +1,10 @@
 """Minimale client voor de REST API van Nginx Proxy Manager (getest tegen 2.16).
 
-Lezen: aanmelden, versie en proxy hosts. Schrijven (fase 3): één proxy host
-bijwerken. Let op: NPM test de nieuwe config met `nginx -t` en verwijdert ze bij
-een fout, met de host offline als gevolg, en antwoordt toch 200 (onderzoek 03,
-A9). Wie update_proxy_host gebruikt, moet `meta.nginx_online` in het antwoord
+Lezen: aanmelden, versie, proxy hosts en certificaten. Schrijven (fase 3): één
+proxy host bijwerken; fase 6: een proxy host aanmaken of verwijderen. Let op:
+NPM test de nieuwe config met `nginx -t` en verwijdert ze bij een fout, met de
+host offline als gevolg, en antwoordt toch 200 (onderzoek 03, A9). Wie
+update_proxy_host gebruikt, moet `meta.nginx_online` in het antwoord
 controleren en zelf terugzetten; dat doet services/npm_write.py.
 """
 
@@ -17,9 +18,10 @@ MAX_ERROR_DETAIL = 300
 
 
 class NPMError(Exception):
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, status: int | None = None) -> None:
         super().__init__(message)
         self.message = message
+        self.status = status
 
 
 def normalize_base_url(url: str) -> str:
@@ -80,11 +82,11 @@ class NPMClient:
         except httpx.HTTPError as exc:
             raise NPMError(f"NPM is niet bereikbaar op {self.base_url}: {exc.__class__.__name__}") from exc
         if r.status_code in (401, 403):
-            raise NPMError(f"NPM weigert de toegang ({r.status_code}): {_detail(r)}")
+            raise NPMError(f"NPM weigert de toegang ({r.status_code}): {_detail(r)}", r.status_code)
         if r.is_redirect:
             raise NPMError(f"NPM stuurt door naar {r.headers.get('location')}: controleer de URL")
         if r.status_code >= 400:
-            raise NPMError(f"NPM gaf {r.status_code} op {path}: {_detail(r)}")
+            raise NPMError(f"NPM gaf {r.status_code} op {path}: {_detail(r)}", r.status_code)
         try:
             return r.json()
         except ValueError as exc:
@@ -131,3 +133,39 @@ class NPMClient:
         if not isinstance(data, dict) or data.get("id") != npm_id:
             raise NPMError(f"Onverwacht antwoord van NPM bij het bijwerken van host {npm_id}")
         return data
+
+    # ------------------------------------------------------------ fase 6: app publiceren
+
+    async def proxy_hosts_raw(self) -> list[dict[str, Any]]:
+        """Alle proxy hosts zonder expand (voor de controle of een domein vrij is)."""
+        data = await self._request("GET", "/nginx/proxy-hosts")
+        if not isinstance(data, list):
+            raise NPMError("Onverwacht antwoord van NPM op /nginx/proxy-hosts")
+        return [h for h in data if isinstance(h, dict)]
+
+    async def certificates(self) -> list[dict[str, Any]]:
+        """Certificaten in NPM, zonder `meta`: daarin geeft NPM ook de private key mee."""
+        data = await self._request("GET", "/nginx/certificates")
+        if not isinstance(data, list):
+            raise NPMError("Onverwacht antwoord van NPM op /nginx/certificates")
+        return [
+            {k: v for k, v in c.items() if k != "meta"}
+            for c in data
+            if isinstance(c, dict) and isinstance(c.get("id"), int)
+        ]
+
+    async def create_proxy_host(self, body: dict[str, Any]) -> dict[str, Any]:
+        """POST van een nieuwe host. Let op: het antwoord bevat nog geen `meta.nginx_online`;
+        lees de host daarvoor opnieuw (proxy_host)."""
+        data = await self._request("POST", "/nginx/proxy-hosts", json=body)
+        if not isinstance(data, dict) or not isinstance(data.get("id"), int):
+            raise NPMError("Onverwacht antwoord van NPM bij het aanmaken van een proxy host")
+        return data
+
+    async def delete_proxy_host(self, npm_id: int) -> None:
+        """Host verwijderen; een host die al weg is (404) telt als gelukt."""
+        try:
+            await self._request("DELETE", f"/nginx/proxy-hosts/{int(npm_id)}")
+        except NPMError as exc:
+            if exc.status != 404:
+                raise

@@ -64,4 +64,6 @@ export const changeStatusInfo: Record<string, { label: string; tone: Tone; hint:
 export const actionLabels: Record<string, string> = {
   protect: "Beschermen",
   unprotect: "Bescherming weghalen",
+  publish: "Publiceren",
+  unpublish: "Depubliceren",
 };

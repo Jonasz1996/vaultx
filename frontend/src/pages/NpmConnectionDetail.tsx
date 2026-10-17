@@ -13,6 +13,7 @@ import type {
 } from "../api/types";
 import { AuthLabel, ConnectionForm, type ConnectionValues, HostLink, Warnings } from "../components/catalog";
 import { ChangeJournal, ProtectionDialog } from "../components/npmProtection";
+import { PublishDialog, UnpublishDialog } from "../components/publish";
 import { Badge, Card, Empty, ErrorBox, Loading, Modal, PageHeader } from "../components/ui";
 import { formatDate, relative } from "../format";
 import { SyncStatus, syncSummary } from "./NpmConnections";
@@ -26,6 +27,8 @@ export function NpmConnectionDetailPage() {
   const [showRemoved, setShowRemoved] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
   const [protecting, setProtecting] = useState<{ host: DiscoveredHost; action: ProtectionAction } | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [unpublishing, setUnpublishing] = useState<DiscoveredHost | null>(null);
   const base = `/api/v1/organizations/${orgId}/npm-connections/${connId}`;
   const manage = canManageOrg(me, orgId);
 
@@ -91,7 +94,12 @@ export function NpmConnectionDetailPage() {
         actions={
           manage && (
             <>
-              <button className="btn btn-primary" onClick={() => sync.mutate()} disabled={sync.isPending}>
+              {c.write_enabled && (
+                <button className="btn btn-primary" onClick={() => setPublishing(true)}>
+                  App publiceren
+                </button>
+              )}
+              <button className="btn" onClick={() => sync.mutate()} disabled={sync.isPending}>
                 {sync.isPending ? "Bezig…" : "Nu synchroniseren"}
               </button>
               <button className="btn" onClick={() => setEditing(true)}>
@@ -221,6 +229,11 @@ export function NpmConnectionDetailPage() {
                           door VaultX
                         </Badge>
                       )}
+                      {h.vaultx_published && (
+                        <Badge tone="info" title="Deze host werd aangemaakt via 'App publiceren'">
+                          gepubliceerd door VaultX
+                        </Badge>
+                      )}
                       {h.access_list && <div className="muted small">access list: {h.access_list}</div>}
                       {h.detected_app_type && <div className="mono small muted">{h.detected_app_type}</div>}
                       {Object.keys(h.labels).length > 0 && (
@@ -250,6 +263,14 @@ export function NpmConnectionDetailPage() {
                                 Beschermen met Authentik
                               </button>
                             )
+                          )}
+                          {h.vaultx_published && (
+                            <button
+                              className="btn btn-ghost small btn-danger-text"
+                              onClick={() => setUnpublishing(h)}
+                            >
+                              Depubliceren
+                            </button>
                           )}
                         </div>
                       )}
@@ -297,6 +318,18 @@ export function NpmConnectionDetailPage() {
           <ChangeJournal base={base} />
         </Card>
       )}
+      {publishing && (
+        <PublishDialog
+          base={base}
+          orgId={orgId}
+          conn={c}
+          onClose={() => setPublishing(false)}
+          onDone={invalidate}
+        />
+      )}
+      {unpublishing && (
+        <UnpublishDialog base={base} host={unpublishing} onClose={() => setUnpublishing(null)} onDone={invalidate} />
+      )}
       {protecting && (
         <ProtectionDialog
           base={base}
@@ -322,5 +355,5 @@ export function NpmConnectionDetailPage() {
 }
 
 function hasChanges(hosts: DiscoveredHost[]): boolean {
-  return hosts.some((h) => h.vaultx_managed);
+  return hosts.some((h) => h.vaultx_managed || h.vaultx_published);
 }

@@ -135,6 +135,7 @@ class NpmService:
                 probe_http_port=data.probe_http_port,
                 probe_https_port=data.probe_https_port,
                 authentik_outpost_pk=data.authentik_outpost_pk,
+                theme_css_template=data.theme_css_template,
             )
         )
         await self.db.flush()
@@ -159,7 +160,7 @@ class NpmService:
         if values.get("base_url"):
             values["base_url"] = normalize_base_url(values["base_url"])
         # Deze velden mogen leeg: "" of null wist ze.
-        nullable = {"authentik_outpost_url", "probe_host", "authentik_outpost_pk"}
+        nullable = {"authentik_outpost_url", "probe_host", "authentik_outpost_pk", "theme_css_template"}
         for k in nullable & values.keys():
             values[k] = values[k] or None
         changes = {

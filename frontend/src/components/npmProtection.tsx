@@ -25,7 +25,7 @@ export function ChangeStatusBadge({ status }: { status: string }) {
 }
 
 // Zoals de config in NPM staat: eerst Advanced van de host, dan elke custom location.
-function renderConfig(cfg: Partial<HostConfig>): string {
+export function renderConfig(cfg: Partial<HostConfig>): string {
   const parts = [`# Advanced van de host\n${cfg.advanced_config?.trim() || "(leeg)"}`];
   for (const loc of (cfg.locations ?? []) as NpmLocation[]) {
     const target = `${loc.forward_scheme}://${loc.forward_host}:${loc.forward_port}${loc.forward_path ?? ""}`;
@@ -35,7 +35,7 @@ function renderConfig(cfg: Partial<HostConfig>): string {
   return parts.join("\n\n");
 }
 
-function ConfigDiff({ before, after }: { before: Partial<HostConfig>; after: Partial<HostConfig> | null }) {
+export function ConfigDiff({ before, after }: { before: Partial<HostConfig>; after: Partial<HostConfig> | null }) {
   return (
     <div className="config-diff">
       <div>
@@ -91,7 +91,7 @@ function AuthentikLines({ ak }: { ak: AuthentikChange | null }) {
   );
 }
 
-function ChangeResult({ change }: { change: NpmChange }) {
+export function ChangeResult({ change }: { change: NpmChange }) {
   const box = change.status === "applied" ? "good-box" : change.status === "refused" ? "info-box" : "warn-box";
   return (
     <div className="form">
