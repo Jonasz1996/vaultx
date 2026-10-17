@@ -37,7 +37,8 @@ class BitwardenRoute(APIRoute):
                 return await handler(request)
             except IdentityError as exc:
                 return JSONResponse(
-                    identity_error_json(exc.error, exc.description, exc.message), status_code=400
+                    {**identity_error_json(exc.error, exc.description, exc.message), **exc.extra},
+                    status_code=400,
                 )
             except VaultAuthError as exc:
                 return JSONResponse(

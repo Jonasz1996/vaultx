@@ -108,4 +108,23 @@ def unwrap_user_key(mkey: bytes, enc_user_key: str) -> bytes:
     return decrypt(enc_user_key, *stretch(mkey))
 
 
-__all__ = ["Account", "new_enrollment", "unwrap_user_key"]
+def argon2_master_key(password: str, salt: str, iterations: int, memory_mib: int, parallelism: int) -> bytes:
+    """Argon2id zoals de Bitwarden-clients: salt = SHA-256(e-mailadres), geheugen in KiB."""
+    from argon2.low_level import Type, hash_secret_raw
+
+    return hash_secret_raw(
+        password.encode(),
+        hashlib.sha256(salt.encode()).digest(),
+        time_cost=iterations,
+        memory_cost=memory_mib * 1024,
+        parallelism=parallelism,
+        hash_len=32,
+        type=Type.ID,
+    )
+
+
+def wrap_user_key(mkey: bytes, user_key: bytes) -> str:
+    return encrypt(user_key, *stretch(mkey))
+
+
+__all__ = ["Account", "argon2_master_key", "new_enrollment", "unwrap_user_key", "wrap_user_key"]

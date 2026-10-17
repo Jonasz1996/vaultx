@@ -2,6 +2,7 @@
 
     python -m app.cli create-user --username jonas --email jonas@example.com --admin
     python -m app.cli set-password jonas
+    python -m app.cli reset-vault-2fa jonas@example.com    # telefoon en herstelcode kwijt
 
 Het wachtwoord wordt gevraagd (twee keer, zonder echo) of met --password-stdin van stdin gelezen.
 Op de Debian-CT, als root (zie docs/accounts.md):
@@ -98,6 +99,28 @@ async def reset_password(login: str, password: str) -> User:
         return user
 
 
+async def reset_vault_two_factor(email: str) -> str:
+    """Tweestapsverificatie van een kluis uitzetten; het master password blijft nodig."""
+    from app.repositories import VaultAccountRepository
+    from app.services.vault_auth import clear_two_factor, normalize_email
+
+    async with get_sessionmaker()() as db:
+        found = await VaultAccountRepository(db).by_email(normalize_email(email))
+        account = await VaultAccountRepository(db).lock(found.user_id) if found else None
+        if account is None or not account.two_factor_enabled:
+            raise VaultXError(f"Geen kluis met tweestapsverificatie voor {email!r}")
+        clear_two_factor(account)
+        await AuditService(db).record(
+            "vault.2fa.disable",
+            Actor.system("cli", RequestMeta()),
+            target_type="vault",
+            target_id=account.user_id,
+            details={"via": "cli"},
+        )
+        await db.commit()
+        return account.email
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="VaultX-accounts beheren")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -110,7 +133,25 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("set-password", help="Wachtwoord van een account instellen en het account activeren")
     s.add_argument("login", help="Gebruikersnaam of e-mailadres")
     s.add_argument("--password-stdin", action="store_true")
+    t = sub.add_parser("reset-vault-2fa", help="Tweestapsverificatie van een kluis uitzetten")
+    t.add_argument("email", help="E-mailadres van de kluis (login in de Bitwarden-apps)")
     args = parser.parse_args(argv)
+
+    if args.command == "reset-vault-2fa":
+
+        async def run_reset() -> str:
+            try:
+                return await reset_vault_two_factor(args.email)
+            finally:
+                await dispose_engine()
+
+        try:
+            email = asyncio.run(run_reset())
+        except VaultXError as exc:
+            print(f"Fout: {exc.message}", file=sys.stderr)
+            return 1
+        print(f"OK: {email} logt in de Bitwarden-apps weer in met enkel het master password.")
+        return 0
 
     async def run() -> User:
         try:

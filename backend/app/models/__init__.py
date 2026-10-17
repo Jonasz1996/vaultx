@@ -16,7 +16,7 @@ from app.models.notes import VaultNote, VaultNoteFile, VaultNoteVersion
 from app.models.organization import Organization, Team
 from app.models.session import UserSession
 from app.models.user import User
-from app.models.vault import KdfType, VaultAccount, VaultCipher, VaultDevice, VaultFolder
+from app.models.vault import KdfType, VaultAccount, VaultAttachment, VaultCipher, VaultDevice, VaultFolder
 
 __all__ = [
     "AppSource",
@@ -40,6 +40,7 @@ __all__ = [
     "User",
     "UserSession",
     "VaultAccount",
+    "VaultAttachment",
     "VaultCipher",
     "VaultDevice",
     "VaultFolder",

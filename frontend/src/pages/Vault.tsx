@@ -1,10 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import qrcode from "qrcode-generator";
 import { useState, type FormEvent } from "react";
 import { api } from "../api/client";
 import type { VaultStatus } from "../api/types";
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, Stat } from "../components/ui";
 import { formatDate, relative } from "../format";
-import { createVaultKeys, passwordProblems } from "../vault/crypto";
+import {
+  ARGON2_DEFAULTS,
+  changeMasterPassword,
+  createVaultKeys,
+  deriveLogin,
+  passwordProblems,
+  PBKDF2_ITERATIONS,
+} from "../vault/crypto";
 
 const BASE = "/api/v1/me/vault";
 
@@ -219,6 +227,8 @@ function Enrolled({ s, onChange }: { s: VaultStatus; onChange: () => void }) {
           <dd>{formatDate(s.enrolled_at)}</dd>
         </dl>
       </Card>
+      <TwoFactor s={s} onChange={onChange} />
+      <ChangePassword s={s} onDone={onChange} />
       <Card title="Kluis leegmaken">
         <p className="muted small">
           Master password vergeten? Niemand kan het herstellen. Je kan de kluis wel verwijderen en opnieuw activeren;
@@ -237,5 +247,283 @@ function Enrolled({ s, onChange }: { s: VaultStatus; onChange: () => void }) {
         </button>
       </Card>
     </>
+  );
+}
+
+function unlockParams(s: VaultStatus) {
+  if (!s.kdf_salt || s.kdf === null || !s.kdf_iterations) throw new Error("Je kluis is nog niet actief");
+  return {
+    salt: s.kdf_salt,
+    kdf: s.kdf,
+    iterations: s.kdf_iterations,
+    memory: s.kdf_memory,
+    parallelism: s.kdf_parallelism,
+  };
+}
+
+function qrDataUrl(text: string): string {
+  const qr = qrcode(0, "M");
+  qr.addData(text);
+  qr.make();
+  return qr.createDataURL(5, 2);
+}
+
+function TwoFactor({ s, onChange }: { s: VaultStatus; onChange: () => void }) {
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [setup, setSetup] = useState<{ secret: string; otpauth_uri: string } | null>(null);
+  const [recovery, setRecovery] = useState<string | null>(null);
+
+  const start = useMutation({
+    mutationFn: async () => {
+      const { loginHash } = await deriveLogin(unlockParams(s), password);
+      return api.post<{ secret: string; otpauth_uri: string }>(`${BASE}/2fa/setup`, { master_password_hash: loginHash });
+    },
+    onSuccess: (data) => {
+      setPassword("");
+      setSetup(data);
+    },
+  });
+  const enable = useMutation({
+    mutationFn: () => api.post<{ recovery_code: string }>(`${BASE}/2fa/enable`, { code }),
+    onSuccess: (data) => {
+      setCode("");
+      setSetup(null);
+      setRecovery(data.recovery_code);
+      onChange();
+    },
+  });
+  const disable = useMutation({
+    mutationFn: async () => {
+      const { loginHash } = await deriveLogin(unlockParams(s), password);
+      return api.post(`${BASE}/2fa/disable`, { master_password_hash: loginHash, code });
+    },
+    onSuccess: () => {
+      setPassword("");
+      setCode("");
+      setRecovery(null);
+      onChange();
+    },
+  });
+
+  const passwordField = (
+    <label className="field">
+      <span>Master password</span>
+      <input
+        type="password"
+        autoComplete="current-password"
+        required
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
+    </label>
+  );
+
+  return (
+    <Card
+      title="Tweestapsverificatie"
+      actions={s.two_factor_enabled ? <Badge tone="good">aan</Badge> : <Badge>uit</Badge>}
+    >
+      {recovery && (
+        <div className="info-box">
+          <p>
+            <b>Bewaar deze herstelcode</b> (op papier of buiten deze kluis). Ben je je telefoon kwijt, dan log je
+            daarmee toch in; tweestapsverificatie gaat dan uit. Je ziet hem maar één keer.
+          </p>
+          <code className="mono recovery-code">{recovery}</code>
+        </div>
+      )}
+      {s.two_factor_enabled ? (
+        <form
+          className="form"
+          style={{ maxWidth: 520 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            disable.mutate();
+          }}
+        >
+          <p className="muted small">
+            Aan sinds {formatDate(s.two_factor_enabled_at)}. De Bitwarden-apps vragen na je master password een code
+            uit je authenticator-app; met "Onthoud mij" slaat een apparaat dat 30 dagen over.
+          </p>
+          {passwordField}
+          <label className="field">
+            <span>Code uit de app of herstelcode</span>
+            <input autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} />
+          </label>
+          <ErrorBox error={disable.error} />
+          <div className="form-actions">
+            <button className="btn btn-danger" disabled={disable.isPending || !password || !code}>
+              {disable.isPending ? "Controleren…" : "Tweestapsverificatie uitzetten"}
+            </button>
+          </div>
+        </form>
+      ) : setup ? (
+        <form
+          className="form"
+          style={{ maxWidth: 520 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            enable.mutate();
+          }}
+        >
+          <p className="muted small">
+            Scan deze code met je authenticator-app (Aegis, 2FAS, Google Authenticator, Bitwarden Authenticator, ...)
+            en vul de code in die de app toont.
+          </p>
+          <img className="qr" src={qrDataUrl(setup.otpauth_uri)} alt="QR-code voor je authenticator-app" />
+          <p className="small">
+            Kan je niet scannen? Sleutel: <code className="mono">{setup.secret}</code>
+          </p>
+          <label className="field">
+            <span>Code uit de app</span>
+            <input
+              autoComplete="one-time-code"
+              inputMode="numeric"
+              required
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+          </label>
+          <ErrorBox error={enable.error} />
+          <div className="form-actions">
+            <button className="btn btn-primary" disabled={enable.isPending || code.length < 6}>
+              Aanzetten
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => setSetup(null)}>
+              Annuleren
+            </button>
+          </div>
+        </form>
+      ) : (
+        <form
+          className="form"
+          style={{ maxWidth: 520 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            start.mutate();
+          }}
+        >
+          <p className="muted small">
+            Wie je master password kent, kan dan nog niet inloggen in de Bitwarden-apps zonder je telefoon. Geldt voor
+            de apps, extensies en CLI; in VaultX zelf beschermt Authentik je login.
+          </p>
+          {passwordField}
+          <ErrorBox error={start.error} />
+          <div className="form-actions">
+            <button className="btn btn-primary" disabled={start.isPending || !password}>
+              {start.isPending ? "Controleren…" : "Instellen met een authenticator-app"}
+            </button>
+          </div>
+        </form>
+      )}
+    </Card>
+  );
+}
+
+function ChangePassword({ s, onDone }: { s: VaultStatus; onDone: () => void }) {
+  const [current, setCurrent] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [kdf, setKdf] = useState<number>(s.kdf ?? 0);
+  const [done, setDone] = useState(false);
+  const email = s.email ?? "";
+  const problems = password ? passwordProblems(password, email) : [];
+  const mismatch = confirmPw.length > 0 && confirmPw !== password;
+
+  const change = useMutation({
+    mutationFn: async () => {
+      const params = unlockParams(s);
+      const old = await deriveLogin(params, current);
+      const { user_key } = await api.post<{ user_key: string }>(`${BASE}/unlock`, {
+        master_password_hash: old.loginHash,
+      });
+      // Zelfde KDF als nu blijft ongewijzigd; anders de standaard van Bitwarden.
+      const next =
+        kdf === s.kdf
+          ? { kdf, iterations: params.iterations, memory: params.memory, parallelism: params.parallelism }
+          : kdf === 1
+            ? { kdf: 1, ...ARGON2_DEFAULTS }
+            : { kdf: 0, iterations: PBKDF2_ITERATIONS };
+      const payload = await changeMasterPassword(old, user_key, params.salt, password, next);
+      return api.post<VaultStatus>(`${BASE}/password`, payload);
+    },
+    onSuccess: () => {
+      setCurrent("");
+      setPassword("");
+      setConfirmPw("");
+      setDone(true);
+      onDone();
+    },
+  });
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (problems.length || mismatch || !current) return;
+    setDone(false);
+    change.mutate();
+  };
+
+  return (
+    <Card title="Master password wijzigen">
+      <form onSubmit={submit} className="form" style={{ maxWidth: 520 }}>
+        <p className="muted small">
+          Je items blijven gewoon leesbaar: je browser pakt je sleutel opnieuw in met het nieuwe wachtwoord. Daarna
+          worden al je apparaten afgemeld en log je in de Bitwarden-apps opnieuw in met het nieuwe wachtwoord.
+        </p>
+        {done && <div className="info-box small">Master password gewijzigd. Log opnieuw in op je apparaten.</div>}
+        <label className="field">
+          <span>Huidig master password</span>
+          <input
+            type="password"
+            autoComplete="current-password"
+            required
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Nieuw master password</span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          {problems.length > 0 && <span className="muted small">Nog nodig: {problems.join(", ")}</span>}
+        </label>
+        <label className="field">
+          <span>Herhaal nieuw master password</span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            required
+            value={confirmPw}
+            onChange={(e) => setConfirmPw(e.target.value)}
+          />
+          {mismatch && <span className="small" style={{ color: "var(--bad-fg)" }}>Komt niet overeen</span>}
+        </label>
+        <label className="field">
+          <span>Sleutelafleiding</span>
+          <select value={kdf} onChange={(e) => setKdf(Number(e.target.value))}>
+            <option value={0}>PBKDF2-SHA256 ({PBKDF2_ITERATIONS.toLocaleString("nl-BE")} iteraties)</option>
+            <option value={1}>
+              Argon2id ({ARGON2_DEFAULTS.iterations} iteraties, {ARGON2_DEFAULTS.memory} MiB,{" "}
+              {ARGON2_DEFAULTS.parallelism} threads), sterker tegen kraken
+            </option>
+          </select>
+        </label>
+        <ErrorBox error={change.error} />
+        <div className="form-actions">
+          <button
+            className="btn btn-primary"
+            disabled={change.isPending || !current || !password || problems.length > 0 || mismatch || !confirmPw}
+          >
+            {change.isPending ? "Sleutels afleiden…" : "Wijzigen en alle apparaten afmelden"}
+          </button>
+        </div>
+      </form>
+    </Card>
   );
 }

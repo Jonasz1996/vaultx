@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 
 from app.api.deps import CurrentPrincipal, DbSession, SettingsDep
 from app.schemas.common import Page
@@ -16,6 +16,7 @@ from app.schemas.users import (
     UserUpdate,
 )
 from app.services.users import UserService
+from app.services.vault import VaultService
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -106,3 +107,13 @@ async def revoke_user_sessions(
     user_id: UUID, p: CurrentPrincipal, db: DbSession, settings: SettingsDep
 ) -> dict:
     return {"revoked": await UserService(db, settings).revoke_sessions(p, user_id)}
+
+
+@router.delete(
+    "/{user_id}/vault-2fa",
+    status_code=204,
+    summary="Tweestapsverificatie van iemands kluis uitzetten (telefoon en herstelcode kwijt)",
+)
+async def reset_vault_two_factor(user_id: UUID, p: CurrentPrincipal, db: DbSession) -> Response:
+    await VaultService(db).admin_reset_two_factor(p, user_id)
+    return Response(status_code=204)

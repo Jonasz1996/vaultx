@@ -255,6 +255,9 @@ jobs:
       - run: pip install -r backend/requirements-dev.txt
       # Vaste versie: een nieuwe clientversie wordt bewust getest voor ze hier komt.
       - run: npm install -g @bitwarden/cli@2026.9.1
+      # De e2e draait de browsercode (Argon2id via hash-wasm) in Node.
+      - run: npm ci
+        working-directory: frontend
       - name: Login, sync en items met bw
         working-directory: backend
         env:
@@ -299,6 +302,10 @@ jobs:
         env:
           VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
         run: python e2e/password_login_e2e.py notes-shots/login
+      - name: Mijn kluis in Chromium (tweestapsverificatie, master password naar Argon2id)
+        env:
+          VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
+        run: python e2e/vault_ui_e2e.py notes-shots/kluis
       - uses: actions/upload-artifact@v4
         if: always()
         with:

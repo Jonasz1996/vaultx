@@ -457,6 +457,8 @@ export interface VaultStatus {
   trash_count: number;
   folder_count: number;
   note_count: number;
+  two_factor_enabled: boolean;
+  two_factor_enabled_at: string | null;
   devices: VaultDevice[];
 }
 

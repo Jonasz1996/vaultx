@@ -21,6 +21,11 @@ from app.services.vault_auth import PreloginData, TokenGrant
 # Max. grootte van het versleutelde deel van één item (JSON). Bijlagen horen hier niet in.
 MAX_CIPHER_PAYLOAD_BYTES = 256 * 1024
 
+# Grenzen voor één import (POST /api/ciphers/import). Een volle kluis van een paar
+# duizend items is een paar MB; nginx laat voor dit pad tot 50 MB door.
+MAX_IMPORT_ITEMS = 20_000
+MAX_IMPORT_FOLDERS = 2_000
+
 # Velden die de server zelf beheert. Al de rest van een cipher-request is
 # versleutelde inhoud en wordt ongewijzigd bewaard en teruggegeven.
 SERVER_MANAGED_CIPHER_FIELDS = {
@@ -117,6 +122,40 @@ class FolderIn(_CamelIn):
     name: str = Field(min_length=1, max_length=10_000)
 
 
+class AttachmentIn(_CamelIn):
+    """POST /api/ciphers/{id}/attachment/v2: naam en sleutel versleuteld, grootte van de blob."""
+
+    file_name: str = Field(alias="fileName", min_length=1, max_length=4096)
+    key: str | None = Field(None, max_length=1024)
+    file_size: int = Field(alias="fileSize", ge=1)
+    admin_request: bool = Field(False, alias="adminRequest")
+
+
+class ImportFolderIn(_CamelIn):
+    id: UUID | None = None
+    name: str = Field(min_length=1, max_length=10_000)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _empty_id(cls, v: Any) -> Any:
+        return v or None
+
+
+class KvpIn(_CamelIn):
+    key: int = Field(ge=0)
+    value: int = Field(ge=0)
+
+
+class ImportIn(_CamelIn):
+    """POST /api/ciphers/import: een volledige export die een client al versleuteld heeft."""
+
+    ciphers: list[CipherIn] = Field(default_factory=list, max_length=MAX_IMPORT_ITEMS)
+    folders: list[ImportFolderIn] = Field(default_factory=list, max_length=MAX_IMPORT_FOLDERS)
+    folder_relationships: list[KvpIn] = Field(
+        default_factory=list, alias="folderRelationships", max_length=MAX_IMPORT_ITEMS
+    )
+
+
 class UserKeyIdIn(_CamelIn):
     user_key_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$", alias="userKeyId")
 
@@ -188,6 +227,8 @@ def token_json(grant: TokenGrant) -> dict[str, Any]:
     }
     if grant.refresh_token:
         out["refresh_token"] = grant.refresh_token
+    if grant.two_factor_token:
+        out["TwoFactorToken"] = grant.two_factor_token
     return out
 
 
@@ -212,7 +253,7 @@ def profile_json(user: User, account: VaultAccount) -> dict[str, Any]:
         "premium": True,
         "premiumFromOrganization": False,
         "culture": "en-US",
-        "twoFactorEnabled": False,
+        "twoFactorEnabled": account.two_factor_enabled,
         "key": account.user_key,
         "privateKey": account.private_key,
         "accountKeys": account_keys_json(account),
@@ -238,7 +279,7 @@ def folder_json(folder: VaultFolder) -> dict[str, Any]:
     }
 
 
-def cipher_json(cipher: VaultCipher) -> dict[str, Any]:
+def cipher_json(cipher: VaultCipher, attachments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {
         **cipher.data,
         "id": str(cipher.id),
@@ -251,7 +292,7 @@ def cipher_json(cipher: VaultCipher) -> dict[str, Any]:
         "permissions": {"delete": True, "restore": True},
         "organizationUseTotp": False,
         "collectionIds": [],
-        "attachments": None,
+        "attachments": attachments or None,
         "revisionDate": iso(cipher.revision_date),
         "creationDate": iso(cipher.created_at),
         "deletedDate": iso(cipher.deleted_at),
@@ -261,14 +302,14 @@ def cipher_json(cipher: VaultCipher) -> dict[str, Any]:
 
 
 def sync_json(
-    user: User, account: VaultAccount, folders: list[VaultFolder], ciphers: list[VaultCipher]
+    user: User, account: VaultAccount, folders: list[VaultFolder], ciphers: list[dict[str, Any]]
 ) -> dict[str, Any]:
     return {
         "profile": profile_json(user, account),
         "folders": [folder_json(f) for f in folders],
         "collections": [],
         "policies": [],
-        "ciphers": [cipher_json(c) for c in ciphers],
+        "ciphers": ciphers,
         "domains": {"equivalentDomains": [], "globalEquivalentDomains": [], "object": "domains"},
         "sends": [],
         "userDecryption": {

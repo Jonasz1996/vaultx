@@ -11,16 +11,18 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, deferred, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, new_uuid, utcnow
 
@@ -76,8 +78,21 @@ class VaultAccount(TimestampMixin, Base):
     # Bescherming tegen wachtwoord raden via het token-endpoint.
     failed_logins: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Tweestapsverificatie (fase 9): TOTP-geheim, versleuteld met de serversleutel
+    # (seal_secret, context "vault-totp:<user_id>"). totp_pending tijdens het instellen.
+    totp_secret: Mapped[bytes | None] = mapped_column(LargeBinary)
+    totp_pending: Mapped[bytes | None] = mapped_column(LargeBinary)
+    # Laatst gebruikte tijdstap: dezelfde code werkt geen tweede keer.
+    totp_last_step: Mapped[int | None] = mapped_column(BigInteger)
+    # SHA-256 van de herstelcode (160 bits willekeur, dus geen trage hash nodig).
+    recovery_code_hash: Mapped[str | None] = mapped_column(String(64))
+    two_factor_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     user = relationship("User")
+
+    @property
+    def two_factor_enabled(self) -> bool:
+        return self.totp_secret is not None
 
 
 class VaultDevice(Base):
@@ -100,6 +115,9 @@ class VaultDevice(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # "Onthoud mij" bij tweestapsverificatie: SHA-256 van het token dat de client bewaart.
+    remember_token_hash: Mapped[str | None] = mapped_column(String(64))
+    remember_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class VaultFolder(Base):
@@ -141,4 +159,30 @@ class VaultCipher(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-__all__ = ["KdfType", "VaultAccount", "VaultCipher", "VaultDevice", "VaultFolder"]
+class VaultAttachment(Base):
+    """Bijlage bij een kluisitem (fase 9), versleuteld door de Bitwarden-client.
+
+    `data` is een EncArrayBuffer; `key` is de bestandssleutel, versleuteld met de user
+    key (of de itemsleutel); `file_name` is een EncString. Tot de client de inhoud
+    uploadt, is `data` leeg en telt de bijlage niet mee in het item.
+    """
+
+    __tablename__ = "vault_attachments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    cipher_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vault_ciphers.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vault_accounts.user_id", ondelete="CASCADE"), index=True
+    )
+    file_name: Mapped[str] = mapped_column(Text)
+    key: Mapped[str | None] = mapped_column(Text)
+    # Grootte van de versleutelde inhoud, zoals de client ze aankondigt.
+    size: Mapped[int] = mapped_column(BigInteger)
+    data: Mapped[bytes | None] = deferred(mapped_column(LargeBinary))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+__all__ = ["KdfType", "VaultAccount", "VaultAttachment", "VaultCipher", "VaultDevice", "VaultFolder"]

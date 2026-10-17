@@ -83,6 +83,21 @@ def self_signed_cert(directory: str) -> tuple[str, str]:
     return cert_path, key_path
 
 
+PASSWORD_NOW = [PASSWORD]
+
+
+def node_json(script: str, mode: str, data: object) -> dict:
+    """Draait een stuk browsercode (frontend/src/vault/crypto.ts) via e2e/<script> in Node."""
+    out = subprocess.run(
+        ["node", "--experimental-strip-types", str(ROOT / "e2e" / script), mode],
+        input=json.dumps(data),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return json.loads(out)
+
+
 def step(msg: str) -> None:
     print(f"==> {msg}", flush=True)
 
@@ -287,6 +302,100 @@ def main() -> None:
         folders = bw.json("list", "folders")
         assert [f["id"] for f in folders if f["id"]] == [], folders  # alleen het virtuele "No Folder"
 
+        step("Fase 9: importeren met bw import (Bitwarden-JSON met een map)")
+        export = {
+            "encrypted": False,
+            "folders": [{"id": "6e0c7a7e-3f7e-4c55-9d7c-1f2a3b4c5d6e", "name": "Geimporteerd"}],
+            "items": [
+                {
+                    **template,
+                    "name": "Proxmox",
+                    "folderId": "6e0c7a7e-3f7e-4c55-9d7c-1f2a3b4c5d6e",
+                    "login": {**login_tpl, "username": "root", "password": "pve-pw-1", "uris": []},
+                },
+                {**template, "name": "Router", "login": {**login_tpl, "username": "admin", "password": "r2"}},
+            ],
+        }
+        export_file = Path(appdata) / "export.json"
+        export_file.write_text(json.dumps(export))
+        bw.run("import", "bitwardenjson", str(export_file))
+        bw.run("sync", "--force")
+        assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-1"
+        imported_folder = [f for f in bw.json("list", "folders") if f["name"] == "Geimporteerd"]
+        assert len(imported_folder) == 1, imported_folder
+        proxmox = bw.json("list", "items", "--search", "Proxmox")[0]
+        assert proxmox["folderId"] == imported_folder[0]["id"], proxmox
+
+        step("Fase 9: master password wijzigen in VaultX (naar Argon2id), daarna inloggen met bw")
+        new_password = "een-nog-langer-nieuw-master-password-9"
+        st = user.get("/api/v1/me/vault").json()
+        params = {
+            "salt": st["kdf_salt"],
+            "kdf": st["kdf"],
+            "iterations": st["kdf_iterations"],
+            "memory": st["kdf_memory"],
+            "parallelism": st["kdf_parallelism"],
+        }
+        old = node_json("vault_password.mts", "derive", {"params": params, "password": PASSWORD})
+        csrf = {"X-VaultX-CSRF": "1"}
+        r = user.post("/api/v1/me/vault/unlock", json={"master_password_hash": old["loginHash"]}, headers=csrf)
+        assert r.status_code == 200, r.text
+        change = node_json(
+            "vault_password.mts",
+            "change",
+            {
+                **old,
+                "encUserKey": r.json()["user_key"],
+                "salt": st["kdf_salt"],
+                "newPassword": new_password,
+                "next": {"kdf": 1, "iterations": 3, "memory": 64, "parallelism": 4},
+            },
+        )
+        r = user.post("/api/v1/me/vault/password", json=change, headers=csrf)
+        assert r.status_code == 200, r.text
+        assert bw.run("sync", "--force", check=False).returncode != 0, "oude sessie werkt nog na wijziging"
+        bw.run("logout", check=False)
+        bw.session = None
+        old_login = bw.run("login", email, PASSWORD, "--raw", check=False)
+        assert old_login.returncode != 0, "oud wachtwoord werkt nog"
+        bw.session = bw.run("login", email, new_password, "--raw").stdout.strip()
+        assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-1"
+        PASSWORD_NOW[0] = new_password
+
+        step("Fase 9: tweestapsverificatie aanzetten, daarna inloggen met bw --method 0 --code")
+        from app.services import totp
+
+        params = {**params, "kdf": 1, "iterations": 3, "memory": 64, "parallelism": 4}
+        now_hash = node_json("vault_password.mts", "derive", {"params": params, "password": new_password})
+        r = user.post("/api/v1/me/vault/2fa/setup", json={"master_password_hash": now_hash["loginHash"]}, headers=csrf)
+        assert r.status_code == 200, r.text
+        secret = r.json()["secret"]
+        r = user.post("/api/v1/me/vault/2fa/enable", json={"code": totp.code_at(secret)}, headers=csrf)
+        assert r.status_code == 200, r.text
+        bw.run("logout", check=False)
+        bw.session = None
+        no_code = bw.run("login", email, new_password, "--raw", check=False)
+        assert no_code.returncode != 0, "login zonder code lukte"
+        code = totp.code_at(secret, time.time() + 30)
+        bw.session = bw.run("login", email, new_password, "--method", "0", "--code", code, "--raw").stdout.strip()
+        assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-1"
+        assert user.get("/api/v1/me/vault").json()["two_factor_enabled"] is True
+
+        step("Fase 9: bijlage toevoegen, downloaden en verwijderen met bw")
+        attach_src = Path(appdata) / "router-backup.cfg"
+        attach_src.write_bytes(b"hostname router\ninterface eth0\n" + os.urandom(2048))
+        proxmox_id = bw.json("list", "items", "--search", "Proxmox")[0]["id"]
+        with_att = bw.json("create", "attachment", "--file", str(attach_src), "--itemid", proxmox_id)
+        att = with_att["attachments"][0]
+        assert att["fileName"] == "router-backup.cfg", att
+        bw.run("sync", "--force")
+        out = Path(appdata) / "terug.cfg"
+        bw.run("get", "attachment", "router-backup.cfg", "--itemid", proxmox_id, "--output", str(out))
+        assert out.read_bytes() == attach_src.read_bytes(), "bijlage komt niet ongeschonden terug"
+        bw.run("delete", "attachment", att["id"], "--itemid", proxmox_id)
+        bw.run("sync", "--force")
+        assert not bw.json("get", "item", proxmox_id).get("attachments"), "bijlage niet verwijderd"
+
         step("Gebruiker deactiveren in VaultX: de kluis gaat dicht op alle apparaten")
         admin = httpx.Client(base_url=base, verify=cert)
         login(admin, fake, "admin-e2e", "admin-e2e@example.com", ["vaultx-admins"])
@@ -298,7 +407,9 @@ def main() -> None:
         assert bw.run("sync", "--force", check=False).returncode != 0, "sync lukte na deactiveren"
         bw.run("logout", check=False)
         bw.session = None
-        again = bw.run("login", email, PASSWORD, "--raw", check=False)
+        again = bw.run(
+            "login", email, PASSWORD_NOW[0], "--method", "0", "--code", totp.code_at(secret), "--raw", check=False
+        )
         assert again.returncode != 0, "login lukte na deactiveren"
         print((again.stdout + again.stderr).strip().splitlines()[-1])
 
