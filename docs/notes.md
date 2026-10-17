@@ -21,6 +21,11 @@ sleutel van je kluis.
   (EncString type 2: AES-256-CBC met HMAC-SHA256, hetzelfde formaat als de
   Bitwarden-items). De server bewaart enkel die blob, een revisienummer en
   tijdstempels. Links, tags, zoeken en de grafiek rekent de browser uit.
+- De browser kiest het id van een nieuwe notitie zelf en versleutelt het mee. Geeft
+  de server bij een id de inhoud van een andere notitie terug, dan weigert de
+  browser die ("konden niet ontsleuteld worden"). Notities van voor deze controle
+  krijgen het id bij de eerstvolgende wijziging. Een oudere versie van dezelfde
+  notitie terugzetten kan een kwaadwillige server nog wel.
 - Bijlagen versleutelt de browser met dezelfde sleutel, in het formaat dat
   Bitwarden voor bijlagen gebruikt (één byte type 2, IV, MAC, ciphertext); de
   bestandsnaam is een aparte EncString. De server kent enkel de grootte.
@@ -69,8 +74,9 @@ Bijlagen mogen standaard 25 MB per bestand zijn en samen 1 GB per gebruiker
 versleuteld in PostgreSQL. De meegeleverde nginx-configuratie laat voor
 `/api/v1/me/notes` uploads tot 30 MB toe (de rest van de API blijft op 1 MB);
 verhoog je de limiet, pas dan ook `client_max_body_size` daar aan. Werk je een
-bestaande installatie bij, kopieer dan ook de nieuwe nginx-configuratie (zie
-docs/debian-ct.md, stap 5), anders krijgen grote notities en bijlagen een 413.
+bestaande installatie bij, gebruik dan `deploy/debian/update.sh` (zie
+[debian-ct.md](debian-ct.md#updaten)): dat kopieert ook de nieuwe nginx-configuratie,
+anders krijgen grote notities en bijlagen een 413.
 
 ## Nog niet (latere fases)
 

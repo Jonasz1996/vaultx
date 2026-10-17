@@ -124,6 +124,25 @@ class Settings(BaseSettings):
     def authentik_api_enabled(self) -> bool:
         return bool(self.authentik_api_token and self.authentik_api_token.get_secret_value())
 
+    def insecure_settings(self) -> list[str]:
+        """Instellingen die enkel bij testen horen; bij het starten wordt hiervoor gewaarschuwd."""
+        found = []
+        if not self.cookie_secure:
+            found.append("VAULTX_COOKIE_SECURE=false: de sessiecookie gaat ook over http")
+        if self.public_url.startswith("http://"):
+            found.append(
+                "VAULTX_PUBLIC_URL begint met http://: VaultX hoort enkel via HTTPS bereikbaar te zijn"
+            )
+        if not self.oidc_verify_tls:
+            found.append(
+                "VAULTX_OIDC_VERIFY_TLS=false: het TLS-certificaat van Authentik wordt niet gecontroleerd"
+            )
+        if not self.authentik_verify_tls:
+            found.append(
+                "VAULTX_AUTHENTIK_VERIFY_TLS=false: TLS van de Authentik-API wordt niet gecontroleerd"
+            )
+        return found
+
     @property
     def discovery_url(self) -> str:
         return f"{self.oidc_issuer.rstrip('/')}/.well-known/openid-configuration"

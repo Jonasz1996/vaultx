@@ -118,6 +118,10 @@ export interface UnlockParams {
 export async function deriveLogin(params: UnlockParams, masterPassword: string) {
   if (params.kdf !== 0)
     throw new Error("Deze kluis gebruikt Argon2id; ontgrendelen in de browser kan voorlopig enkel met PBKDF2.");
+  // De server kiest de parameters niet mee: een (gecompromitteerde) server die 1 iteratie terugstuurt,
+  // zou anders een login-hash krijgen die offline in een oogwenk te kraken is.
+  if (!Number.isInteger(params.iterations) || params.iterations < PBKDF2_ITERATIONS)
+    throw new Error("De server vraagt te weinig PBKDF2-iteraties; ontgrendelen geweigerd.");
   const password = enc.encode(masterPassword);
   const masterKey = await pbkdf2(password, enc.encode(params.salt), params.iterations);
   const loginHash = toB64(await pbkdf2(masterKey, password, 1));

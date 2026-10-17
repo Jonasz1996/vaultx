@@ -265,3 +265,41 @@ async def test_scheduler_syncs_due_connections(admin, fake_npm, app):
         NpmService.__init__ = original
     audit = (await admin.get("/api/v1/audit", params={"action": "npm.sync"})).json()["items"]
     assert audit[0]["actor_type"] == "system" and audit[0]["actor_label"] == "npm-sync"
+
+
+async def test_changing_url_or_identity_requires_the_secret_again(admin):
+    # Anders kan een org-beheerder het opgeslagen wachtwoord naar een eigen server laten sturen.
+    org = await _org(admin)
+    conn = await _conn(admin, org)
+    url = f"/api/v1/organizations/{org['id']}/npm-connections/{conn['id']}"
+    for change in (
+        {"base_url": "https://evil.example"},
+        {"identity": "x@example.com"},
+        {"verify_tls": False},
+    ):
+        r = await admin.patch_json(url, change)
+        assert r.status_code == 422, (change, r.text)
+    r = await admin.patch_json(url, {"base_url": "http://npm.lan:81", "name": "Hernoemd"})
+    assert r.status_code == 200, r.text  # zelfde URL: geen wijziging, geen wachtwoord nodig
+    r = await admin.patch_json(url, {"base_url": "https://npm2.lan", "secret": "nieuw"})
+    assert r.status_code == 200 and r.json()["base_url"] == "https://npm2.lan"
+
+
+async def test_scheduler_skips_a_connection_another_node_claimed(admin, fake_npm):
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.config import get_settings
+    from app.core.db import get_sessionmaker
+    from app.repositories import NpmConnectionRepository
+    from app.services import npm_scheduler
+
+    org = await _org(admin)
+    conn = await _conn(admin, org)
+    settings = get_settings().model_copy(update={"npm_sync_interval_minutes": 15})
+    async with get_sessionmaker()() as db:
+        repo = NpmConnectionRepository(db)
+        cutoff = datetime.now(UTC) - timedelta(minutes=10)
+        assert await repo.claim_due_sync(conn["id"], cutoff, datetime.now(UTC)) is True
+        assert await repo.claim_due_sync(conn["id"], cutoff, datetime.now(UTC)) is False
+        await db.commit()
+    assert await npm_scheduler.sync_due_connections(settings) == 0
