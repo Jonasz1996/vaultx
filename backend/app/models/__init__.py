@@ -2,6 +2,7 @@ from app.models.audit import AuditLog
 from app.models.base import Base
 from app.models.catalog import (
     Application,
+    AppLogin,
     AppSource,
     AuthentikProtection,
     AuthMethod,
@@ -18,6 +19,7 @@ from app.models.vault import KdfType, VaultAccount, VaultCipher, VaultDevice, Va
 
 __all__ = [
     "AppSource",
+    "AppLogin",
     "Application",
     "AuditLog",
     "AuthMethod",

@@ -1,6 +1,6 @@
 [project]
 name = "vaultx-backend"
-version = "0.5.0"
+version = "0.6.0"
 description = "VaultX backend: Authentik/OIDC, multi-tenancy, audit, NPM-connector, applicatiecatalogus en kluis voor Bitwarden-clients"
 requires-python = ">=3.11"
 

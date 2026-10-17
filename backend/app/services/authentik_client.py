@@ -1,10 +1,11 @@
 """Minimale client voor de REST API van Authentik (getest tegen 2026.8.3).
 
-Enkel wat fase 4 nodig heeft: outposts lezen en hun providerlijst bijwerken,
-proxy providers en applicaties aanmaken en verwijderen, groepen zoeken en een
-groep aan een applicatie binden. Aanmelden gaat met een API-token van een
+Enkel wat fase 4 en 5 nodig hebben: outposts lezen en hun providerlijst
+bijwerken, proxy providers, OAuth2/OpenID-providers en applicaties aanmaken en
+verwijderen, groepen zoeken en een groep aan een applicatie binden, en de
+standaard scope mappings en het ondertekeningscertificaat vinden. Aanmelden gaat met een API-token van een
 serviceaccount (Authorization: Bearer). Welke rechten dat account nodig heeft,
-staat in docs/npm.md.
+staat in docs/npm.md (fase 4) en docs/autologin.md (fase 5).
 
 Applicaties zoekt VaultX bewust niet via ``GET /core/applications/``: die lijst
 filtert op wat de aanroeper zelf mag openen (onderzoek 02, KB-37). De
@@ -156,6 +157,21 @@ class AuthentikClient:
 
     async def delete_proxy_provider(self, pk: int) -> None:
         await self._request("DELETE", f"/providers/proxy/{int(pk)}/")
+
+    async def oauth2_providers(self, search: str | None = None) -> list[dict[str, Any]]:
+        return await self._list("/providers/oauth2/", {"search": search} if search else None)
+
+    async def create_oauth2_provider(self, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._request("POST", "/providers/oauth2/", json=body)
+
+    async def delete_oauth2_provider(self, pk: int) -> None:
+        await self._request("DELETE", f"/providers/oauth2/{int(pk)}/")
+
+    async def scope_mappings(self) -> list[dict[str, Any]]:
+        return await self._list("/propertymappings/provider/scope/")
+
+    async def certificate_keypairs(self) -> list[dict[str, Any]]:
+        return await self._list("/crypto/certificatekeypairs/", {"has_key": "true"})
 
     async def create_application(self, body: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/core/applications/", json=body)

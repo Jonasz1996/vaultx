@@ -65,9 +65,15 @@ class Settings(BaseSettings):
     authentik_api_token: SecretStr | None = None
     authentik_verify_tls: bool = True
     authentik_http_timeout_seconds: float = 15.0
-    # Flows voor de proxy providers die VaultX aanmaakt (slugs, standaard die van Authentik zelf).
+    # Flows voor de proxy- en OAuth2-providers die VaultX aanmaakt (slugs, standaard die van Authentik zelf).
     authentik_authorization_flow: str = "default-provider-authorization-implicit-consent"
     authentik_invalidation_flow: str = "default-provider-invalidation-flow"
+    # Automatische login (fase 5): publieke URL van Authentik zoals browsers en apps hem gebruiken
+    # (issuer, authorize- en token-URL in de app-config). Leeg = scheme en host van VAULTX_OIDC_ISSUER.
+    authentik_public_url: str | None = None
+    # Certificaat waarmee Authentik de ID-tokens van door VaultX aangemaakte OIDC-providers tekent.
+    # Bestaat het niet, dan tekent Authentik met het client secret (HS256).
+    authentik_signing_key: str = "authentik Self-signed Certificate"
 
     # Kluis voor Bitwarden-clients (fase 2)
     vault_enabled: bool = True
@@ -91,7 +97,7 @@ class Settings(BaseSettings):
     def _strip_slash(cls, value: str) -> str:
         return value.rstrip("/")
 
-    @field_validator("authentik_api_url")
+    @field_validator("authentik_api_url", "authentik_public_url")
     @classmethod
     def _strip_ak_url(cls, value: str | None) -> str | None:
         return value.strip().rstrip("/") or None if value else None
@@ -100,6 +106,13 @@ class Settings(BaseSettings):
     def authentik_base_url(self) -> str:
         if self.authentik_api_url:
             return self.authentik_api_url
+        parts = urlsplit(self.oidc_issuer)
+        return f"{parts.scheme}://{parts.netloc}"
+
+    @property
+    def authentik_public_base(self) -> str:
+        if self.authentik_public_url:
+            return self.authentik_public_url
         parts = urlsplit(self.oidc_issuer)
         return f"{parts.scheme}://{parts.netloc}"
 

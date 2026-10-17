@@ -7,7 +7,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import NotFoundError
+from app.core.errors import InvalidOperationError, NotFoundError
 from app.models import Application, AppSource, AuthMethod, DiscoveredHost
 from app.repositories import ApplicationRepository, OrganizationRepository
 from app.schemas.catalog import ApplicationCreate, ApplicationUpdate
@@ -149,6 +149,9 @@ class CatalogService:
     async def delete(self, p: Principal, org_id: UUID, app_id: UUID) -> None:
         app = await self._app_visible(p, org_id, app_id)
         await self._require_manage(p, "application.delete", org_id, app_id)
+        if app.login is not None:
+            # Anders blijven de provider en applicatie in Authentik achter.
+            raise InvalidOperationError("Haal eerst de automatische login van deze app weg")
         # Hosts van dit item krijgen "negeren", anders maakt de volgende sync het opnieuw aan.
         ignored = []
         for host in app.hosts:

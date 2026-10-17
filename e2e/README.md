@@ -108,3 +108,21 @@ VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
 ```
 
 Vereist Node 22 of nieuwer en een lege database.
+
+# End-to-end test fase 5: automatische login met echte Authentik
+
+`autologin_e2e.py` test de automatische login. Het maakt in Authentik een
+serviceaccount met enkel de rechten uit docs/autologin.md, groepen en drie
+gebruikers, start VaultX met dat token en richt via de VaultX-API de login in:
+provider, applicatie en groepsbinding in Authentik. De test speelt zelf de app:
+een kleine OIDC-client op localhost die de instellingen uit VaultX krijgt,
+bezoekers zonder sessie meteen naar Authentik stuurt en het ID-token
+controleert. Met `--browser`: carol meldt zich eerst bij Authentik aan en zit
+daarna meteen in de app (geen aanmeldstap), alice komt via de
+Authentik-aanmelding binnen, eve wordt geweigerd. Daarna weghalen.
+
+```bash
+cd backend
+VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
+  python ../e2e/autologin_e2e.py --authentik http://localhost:9000 --authentik-token <beheertoken> --browser
+```

@@ -357,8 +357,65 @@ export interface Application {
   auto_update: boolean;
   hosts: ApplicationHost[];
   warning_count: number;
+  auto_login: boolean;
   created_at: string;
   updated_at: string;
+}
+
+// Fase 5: automatische login via Authentik (de app wordt een OIDC-client van Authentik).
+export interface AppLogin {
+  id: string;
+  application_id: string;
+  app_url: string;
+  redirect_uris: string[];
+  access: string;
+  groups: string[];
+  provider_pk: number;
+  provider_name: string;
+  provider_created: boolean;
+  application_slug: string | null;
+  application_name: string | null;
+  application_created: boolean;
+  client_id: string;
+  cleanup_error: string | null;
+  created_at: string;
+}
+
+export interface AppLoginState {
+  configured: boolean;
+  authentik_url: string;
+  suggested_app_url: string | null;
+  login: AppLogin | null;
+}
+
+export interface AppLoginInput {
+  redirect_uris: string[];
+  access: string;
+  app_url: string | null;
+}
+
+export interface AppLoginPlan {
+  app_url: string | null;
+  redirect_uris: string[];
+  access: string;
+  can_apply: boolean;
+  checks: ProtectionCheck[];
+  steps: string[];
+  groups: string[];
+}
+
+export interface AppLoginConfig {
+  client_id: string;
+  client_secret: string;
+  issuer: string;
+  discovery_url: string;
+  authorization_url: string;
+  token_url: string;
+  userinfo_url: string;
+  end_session_url: string;
+  scopes: string[];
+  redirect_uris: string[];
+  text: string;
 }
 
 export interface VaultDevice {

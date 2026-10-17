@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import selectinload
 
-from app.models import Application, AuthentikProtection, DiscoveredHost, NpmChange, NpmConnection
+from app.models import Application, AppLogin, AuthentikProtection, DiscoveredHost, NpmChange, NpmConnection
 from app.repositories.base import Repository
 
 
@@ -147,3 +147,10 @@ class AuthentikProtectionRepository(Repository[AuthentikProtection]):
             select(AuthentikProtection).where(AuthentikProtection.connection_id == connection_id)
         )
         return list(rows)
+
+
+class AppLoginRepository(Repository[AppLogin]):
+    model = AppLogin
+
+    async def for_application(self, application_id: UUID) -> AppLogin | None:
+        return await self.db.scalar(select(AppLogin).where(AppLogin.application_id == application_id))

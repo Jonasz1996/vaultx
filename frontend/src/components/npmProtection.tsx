@@ -119,15 +119,17 @@ function ChangeResult({ change }: { change: NpmChange }) {
   );
 }
 
-// Toegang tot de Authentik-applicatie die VaultX aanmaakt (fase 4).
-function AccessPicker({
+// Toegang tot de Authentik-applicatie die VaultX aanmaakt (fase 4, ook gebruikt in fase 5).
+export function AccessPicker({
   orgId,
   value,
   onChange,
+  label = "Wie mag de applicatie openen na de Authentik-aanmelding?",
 }: {
   orgId: string;
   value: string;
   onChange: (v: string) => void;
+  label?: string;
 }) {
   const teams = useQuery({
     queryKey: ["teams", orgId],
@@ -135,7 +137,7 @@ function AccessPicker({
   });
   return (
     <label className="field">
-      <span>Wie mag de applicatie openen na de Authentik-aanmelding?</span>
+      <span>{label}</span>
       <select value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="organization">Leden van deze organisatie</option>
         {(teams.data ?? []).map((t) => (
