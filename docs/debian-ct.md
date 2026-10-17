@@ -3,6 +3,11 @@
 Voor wie VaultX rechtstreeks op een Debian 13 (Trixie) LXC/CT wil draaien, met
 Nginx Proxy Manager ervoor. Voor Docker: zie de README.
 
+**Proxmox LXC:** zet bij de container *Options → Features → Nesting* aan. Zonder
+nesting faalt de systemd-hardening van de service met `status=226/NAMESPACE`.
+Proxmox-templates hebben geen `sudo`; de commando's hieronder gebruiken daarom
+`runuser`.
+
 ## 1. Pakketten
 
 ```bash
@@ -17,21 +22,24 @@ apt install -y nodejs
 Debian 13 levert PostgreSQL 17; dat werkt. Wil je PostgreSQL 18 (de keuze uit
 het ontwerpdossier), gebruik dan de PGDG-repository.
 
-Proxmox-templates hebben vaak geen locale. Maakt PostgreSQL dan een
-`SQL_ASCII`-database, dan faalt de eerste migratie ("cannot use a string pattern
-on a bytes-like object"). Maak de cluster dan opnieuw aan met UTF-8 (wist alle
-databases in die cluster):
+## 2. Database
+
+Controleer eerst de codering met `runuser -u postgres -- psql -l`. Een kale
+Proxmox-template heeft geen locale, waardoor de cluster in `SQL_ASCII` staat;
+de migratie faalt dan met `TypeError: cannot use a string pattern on a
+bytes-like object`. Staat er `SQL_ASCII`, maak de cluster dan opnieuw aan in
+UTF-8 (op een verse installatie gaat er niets verloren):
 
 ```bash
 pg_dropcluster 17 main --stop
 pg_createcluster 17 main --locale C.UTF-8 --start
 ```
 
-## 2. Database
+Daarna de rol en de database:
 
 ```bash
-sudo -u postgres createuser vaultx --pwprompt
-sudo -u postgres createdb vaultx --owner vaultx
+runuser -u postgres -- createuser vaultx --pwprompt
+runuser -u postgres -- createdb vaultx --owner vaultx --encoding UTF8 --locale C.UTF-8 --template template0
 ```
 
 ## 3. Code en Python-omgeving
@@ -65,7 +73,12 @@ VAULTX_OIDC_CLIENT_SECRET=...
 ```
 
 De Authentik-kant staat in [authentik.md](authentik.md). Alle andere opties staan
-met hun standaardwaarde in `deploy/debian/vaultx.env.example`.
+met hun standaardwaarde in `deploy/debian/vaultx.env.example`. Zet je eigen account in
+de Authentik-groep `vaultx-admins`, anders ben je na het inloggen geen beheerder.
+
+Het sessiecookie is `Secure`: inloggen werkt enkel via HTTPS (via NPM). Test je
+tijdelijk over gewoon http, zet dan `VAULTX_COOKIE_SECURE=false` en
+`VAULTX_PUBLIC_URL=http://...`, en draai het terug zodra NPM ervoor staat.
 
 ## 5. systemd en nginx
 
@@ -99,7 +112,7 @@ naar `/auth/backchannel-logout` blokkeren.
 
 ```bash
 /opt/vaultx/deploy/debian/update.sh                          # huidige branch bijwerken
-/opt/vaultx/deploy/debian/update.sh phase-7/notes-ts9df7     # of: naar een andere branch overstappen
+/opt/vaultx/deploy/debian/update.sh main                     # of: van een fase-branch naar main overstappen
 ```
 
 Het script maakt eerst een back-up van de database en `/etc/vaultx/vaultx.env`
@@ -113,9 +126,6 @@ terugzet (zie [backup.md](backup.md)).
 Heb je in `/etc/nginx/sites-available/vaultx` zelf iets aangepast (bv.
 `set_real_ip_from` beperkt tot je NPM-host), zet dat dan na het updaten opnieuw
 in de nieuwe versie; het oude bestand staat ernaast als `.bak-<tijd>`.
-
-Stap niet over naar `main` zolang daar enkel het ontwerpdossier staat: de code
-zit voorlopig op de fase-branches.
 
 ## Back-up
 
