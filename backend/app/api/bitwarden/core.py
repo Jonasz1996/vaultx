@@ -18,6 +18,7 @@ from app.schemas.bitwarden import (
     CipherPartialIn,
     FolderIn,
     IdsIn,
+    ImportIn,
     MoveIn,
     UserKeyIdIn,
     cipher_json,
@@ -54,6 +55,7 @@ async def config(settings: SettingsDep) -> dict[str, Any]:
             "api": f"{base}/api",
             "identity": f"{base}/identity",
             "notifications": f"{base}/notifications",
+            "icons": f"{base}/icons",
             "sso": "",
         },
         "featureStates": {},
@@ -149,6 +151,17 @@ async def create_cipher_with_collections(body: CipherCreateIn, c: Caller, db: Db
     if body.collection_ids:
         raise InvalidOperationError("Collecties worden nog niet ondersteund")
     return await create_cipher(body.cipher, c, db)
+
+
+@router.post("/ciphers/import", status_code=200, summary="Import uit een andere kluis (al versleuteld)")
+async def import_ciphers(body: ImportIn, c: Caller, db: DbSession) -> None:
+    ciphers = [(x.type, _check_cipher(c, x), x.favorite, x.archived_date) for x in body.ciphers]
+    await VaultService(db).import_items(
+        c,
+        folders=[(f.id, f.name) for f in body.folders],
+        ciphers=ciphers,
+        relationships=[(r.key, r.value) for r in body.folder_relationships],
+    )
 
 
 @router.put("/ciphers/delete", status_code=200)

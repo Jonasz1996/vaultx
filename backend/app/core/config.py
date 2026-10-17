@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     # Na zoveel foute master passwords na elkaar wordt het account tijdelijk vergrendeld.
     vault_max_failed_logins: int = Field(10, ge=1)
     vault_lockout_minutes: int = Field(15, ge=1)
+    # Websitepictogrammen voor de Bitwarden-apps (fase 9): VaultX haalt ze zelf op bij de site.
+    # false = de apps tonen een standaardicoon en VaultX maakt geen uitgaande verbindingen.
+    vault_icons: bool = True
     # Bijlagen in notities (fase 7): maximale grootte per bestand en totaal per gebruiker.
     # Hou client_max_body_size in nginx voor /api/v1/me/notes minstens even groot.
     vault_note_file_max_mb: int = Field(25, ge=1, le=512)

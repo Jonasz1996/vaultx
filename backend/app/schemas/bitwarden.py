@@ -21,6 +21,11 @@ from app.services.vault_auth import PreloginData, TokenGrant
 # Max. grootte van het versleutelde deel van één item (JSON). Bijlagen horen hier niet in.
 MAX_CIPHER_PAYLOAD_BYTES = 256 * 1024
 
+# Grenzen voor één import (POST /api/ciphers/import). Een volle kluis van een paar
+# duizend items is een paar MB; nginx laat voor dit pad tot 50 MB door.
+MAX_IMPORT_ITEMS = 20_000
+MAX_IMPORT_FOLDERS = 2_000
+
 # Velden die de server zelf beheert. Al de rest van een cipher-request is
 # versleutelde inhoud en wordt ongewijzigd bewaard en teruggegeven.
 SERVER_MANAGED_CIPHER_FIELDS = {
@@ -115,6 +120,31 @@ class MoveIn(IdsIn):
 
 class FolderIn(_CamelIn):
     name: str = Field(min_length=1, max_length=10_000)
+
+
+class ImportFolderIn(_CamelIn):
+    id: UUID | None = None
+    name: str = Field(min_length=1, max_length=10_000)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _empty_id(cls, v: Any) -> Any:
+        return v or None
+
+
+class KvpIn(_CamelIn):
+    key: int = Field(ge=0)
+    value: int = Field(ge=0)
+
+
+class ImportIn(_CamelIn):
+    """POST /api/ciphers/import: een volledige export die een client al versleuteld heeft."""
+
+    ciphers: list[CipherIn] = Field(default_factory=list, max_length=MAX_IMPORT_ITEMS)
+    folders: list[ImportFolderIn] = Field(default_factory=list, max_length=MAX_IMPORT_FOLDERS)
+    folder_relationships: list[KvpIn] = Field(
+        default_factory=list, alias="folderRelationships", max_length=MAX_IMPORT_ITEMS
+    )
 
 
 class UserKeyIdIn(_CamelIn):

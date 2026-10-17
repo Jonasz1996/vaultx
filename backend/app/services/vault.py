@@ -22,6 +22,7 @@ from app.core.config import Settings
 from app.core.errors import ConflictError, InvalidOperationError, NotFoundError, PermissionDeniedError
 from app.core.security import hash_master_password, verify_master_password
 from app.models import VaultAccount, VaultCipher, VaultDevice, VaultFolder
+from app.models.base import new_uuid
 from app.repositories import (
     VaultAccountRepository,
     VaultCipherRepository,
@@ -297,6 +298,57 @@ class VaultService:
         await self._record(c, "vault.item.create", "vault_item", cipher.id, type=type_)
         await self.db.commit()
         return cipher
+
+    async def import_items(
+        self,
+        c: VaultCaller,
+        *,
+        folders: list[tuple[UUID | None, str]],
+        ciphers: list[tuple[int, dict[str, Any], bool, datetime | None]],
+        relationships: list[tuple[int, int]],
+    ) -> tuple[int, int]:
+        """Importeert een export die de client al versleuteld heeft, in één transactie.
+
+        `folders` zijn (bestaand id of None, naam); een id dat niet van deze gebruiker is,
+        wordt een nieuwe map (zoals bij Bitwarden). `relationships` koppelt de index van
+        een item aan de index van een map. Geeft (nieuwe items, nieuwe mappen) terug.
+        """
+        folder_of: dict[int, int] = {}
+        for item_index, folder_index in relationships:
+            if item_index >= len(ciphers) or folder_index >= len(folders):
+                raise InvalidOperationError("Ongeldige koppeling tussen item en map in de import")
+            folder_of[item_index] = folder_index
+        now = await self._touch(c)
+        folder_ids: list[UUID] = []
+        created_folders = 0
+        for existing_id, name in folders:
+            folder = await self.folders.owned(c.account.user_id, existing_id) if existing_id else None
+            if folder is None:
+                folder = self.folders.add(
+                    VaultFolder(id=new_uuid(), user_id=c.account.user_id, name=name, revision_date=now)
+                )
+                created_folders += 1
+            folder_ids.append(folder.id)
+        await self.db.flush()
+        for index, (type_, payload, favorite, archived_at) in enumerate(ciphers):
+            self.ciphers.add(
+                VaultCipher(
+                    user_id=c.account.user_id,
+                    folder_id=folder_ids[folder_of[index]] if index in folder_of else None,
+                    type=type_,
+                    data=payload,
+                    favorite=favorite,
+                    created_at=now,
+                    revision_date=now,
+                    archived_at=archived_at,
+                )
+            )
+        await self.db.flush()
+        await self._record(
+            c, "vault.import", "vault", c.account.user_id, items=len(ciphers), folders=created_folders
+        )
+        await self.db.commit()
+        return len(ciphers), created_folders
 
     async def update_cipher(
         self,

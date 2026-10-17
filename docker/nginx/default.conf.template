@@ -45,6 +45,23 @@ server {
         proxy_read_timeout 120s;
     }
 
+    # Bitwarden-apps (fase 9): import van een volledige kluis en bijlagen bij items. Hou dit minstens
+    # VAULTX_VAULT_ATTACHMENT_MAX_MB (standaard 100) plus wat marge.
+    location ~ ^/api/ciphers/(import$|[^/]+/attachment) {
+        client_max_body_size 110m;
+        proxy_request_buffering off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_pass http://vaultx_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $vaultx_proto;
+        proxy_set_header X-Request-ID $request_id;
+    }
+
     location ~ ^/(auth|identity)(/|$) {
         limit_req zone=vaultx_login burst=20 nodelay;
         proxy_pass http://vaultx_backend;
@@ -57,7 +74,7 @@ server {
         proxy_set_header X-Request-ID $request_id;
     }
 
-    location ~ ^/(api|health)(/|$) {
+    location ~ ^/(api|health|icons)(/|$) {
         proxy_pass http://vaultx_backend;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
@@ -79,7 +96,7 @@ server {
         root /usr/share/nginx/html;
         try_files $uri /index.html;
         add_header Cache-Control "no-cache";
-        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" always;
+        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" always;
         add_header X-Content-Type-Options nosniff always;
         add_header Referrer-Policy same-origin always;
         add_header X-Frame-Options DENY always;
