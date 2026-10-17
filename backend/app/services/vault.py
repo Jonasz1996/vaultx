@@ -18,14 +18,16 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
-from app.core.errors import ConflictError, InvalidOperationError, NotFoundError
-from app.core.security import hash_master_password
+from app.core.config import Settings
+from app.core.errors import ConflictError, InvalidOperationError, NotFoundError, PermissionDeniedError
+from app.core.security import hash_master_password, verify_master_password
 from app.models import VaultAccount, VaultCipher, VaultDevice, VaultFolder
 from app.repositories import (
     VaultAccountRepository,
     VaultCipherRepository,
     VaultDeviceRepository,
     VaultFolderRepository,
+    VaultNoteRepository,
 )
 from app.schemas.vault import VaultEnroll
 from app.services.audit import AuditService
@@ -50,6 +52,7 @@ class VaultStatus:
     item_count: int = 0
     trash_count: int = 0
     folder_count: int = 0
+    note_count: int = 0
 
 
 class VaultService:
@@ -59,6 +62,7 @@ class VaultService:
         self.devices = VaultDeviceRepository(db)
         self.folders = VaultFolderRepository(db)
         self.ciphers = VaultCipherRepository(db)
+        self.notes = VaultNoteRepository(db)
         self.audit = AuditService(db)
 
     # --- Beheer vanuit VaultX (ingelogd via Authentik) --------------------------------
@@ -85,6 +89,7 @@ class VaultService:
             item_count=items,
             trash_count=trash,
             folder_count=len(await self.folders.for_user(account.user_id)),
+            note_count=(await self.notes.counts(account.user_id))[0],
         )
 
     async def enroll(self, p: Principal, data: VaultEnroll) -> VaultAccount:
@@ -127,6 +132,54 @@ class VaultService:
             target_id=p.user.id,
             details={"email": email, "kdf": data.kdf, "kdf_iterations": data.kdf_iterations},
         )
+        await self.db.commit()
+        return account
+
+    async def unlock(self, p: Principal, master_password_hash: str, settings: Settings) -> VaultAccount:
+        """Ontgrendelen in de webinterface (notities, fase 7).
+
+        De browser bewijst het master password met dezelfde afgeleide hash als een
+        Bitwarden-client en krijgt dan de versleutelde user key. Zelfde grens op
+        mislukte pogingen als bij inloggen vanuit een app: het telt samen.
+        """
+        account = await self.accounts.lock(p.user.id)
+        if account is None:
+            raise NotFoundError("Je hebt nog geen kluis")
+        now = datetime.now(UTC)
+        if account.locked_until is not None and account.locked_until > now:
+            await self.audit.record(
+                "vault.unlock",
+                p.actor,
+                outcome="denied",
+                target_type="vault",
+                target_id=p.user.id,
+                details={"reason": "tijdelijk vergrendeld"},
+            )
+            await self.db.commit()
+            raise PermissionDeniedError("Te veel mislukte pogingen. Probeer het over enkele minuten opnieuw.")
+        valid = await run_in_threadpool(
+            verify_master_password, master_password_hash, account.master_password_hash
+        )
+        if not valid:
+            account.failed_logins += 1
+            details: dict[str, Any] = {"reason": "fout master password"}
+            if account.failed_logins >= settings.vault_max_failed_logins:
+                account.locked_until = now + timedelta(minutes=settings.vault_lockout_minutes)
+                account.failed_logins = 0
+                details["locked_until"] = account.locked_until.isoformat()
+            await self.audit.record(
+                "vault.unlock",
+                p.actor,
+                outcome="failure",
+                target_type="vault",
+                target_id=p.user.id,
+                details=details,
+            )
+            await self.db.commit()
+            raise InvalidOperationError("Master password is onjuist")
+        account.failed_logins = 0
+        account.locked_until = None
+        await self.audit.record("vault.unlock", p.actor, target_type="vault", target_id=p.user.id)
         await self.db.commit()
         return account
 

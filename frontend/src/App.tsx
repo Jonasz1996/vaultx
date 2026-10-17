@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import { Outlet, createBrowserRouter } from "react-router";
 import { ApiError, loginUrl } from "./api/client";
 import { useMe } from "./api/hooks";
@@ -18,6 +18,9 @@ import { TeamsPage } from "./pages/Teams";
 import { UserDetailPage } from "./pages/UserDetail";
 import { UsersPage } from "./pages/Users";
 import { VaultPage } from "./pages/Vault";
+
+// Notities (Markdown, grafiek, zip) laden pas wanneer je ze opent.
+const NotesPage = lazy(() => import("./pages/Notes").then((m) => ({ default: m.NotesPage })));
 
 /** Laat enkel ingelogde gebruikers door; anders naar de loginpagina. */
 function RequireAuth() {
@@ -50,6 +53,14 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <DashboardPage /> },
           { path: "vault", element: <VaultPage /> },
+          {
+            path: "notes",
+            element: (
+              <Suspense fallback={<Loading />}>
+                <NotesPage />
+              </Suspense>
+            ),
+          },
           { path: "users", element: <UsersPage /> },
           { path: "users/:userId", element: <UserDetailPage /> },
           { path: "organizations", element: <OrganizationsPage /> },

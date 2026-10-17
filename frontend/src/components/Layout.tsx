@@ -2,10 +2,12 @@ import { NavLink, Outlet } from "react-router";
 import { logout } from "../api/client";
 import { useMe } from "../api/hooks";
 import { userLabel } from "../format";
+import { VaultKeyProvider } from "../notes/session";
 
 const nav = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/vault", label: "Mijn kluis" },
+  { to: "/notes", label: "Notities" },
   { to: "/users", label: "Gebruikers", adminOnly: true },
   { to: "/organizations", label: "Organisaties" },
   { to: "/teams", label: "Teams" },
@@ -44,7 +46,9 @@ export function Layout() {
         )}
       </aside>
       <main className="content">
-        <Outlet />
+        <VaultKeyProvider>
+          <Outlet />
+        </VaultKeyProvider>
       </main>
     </div>
   );

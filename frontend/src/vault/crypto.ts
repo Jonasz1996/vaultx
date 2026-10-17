@@ -75,7 +75,107 @@ async function encryptType2(plain: Uint8Array<ArrayBuffer>, key: Uint8Array<Arra
   return `2.${toB64(iv)}|${toB64(ct)}|${toB64(mac)}`;
 }
 
+function fromB64(s: string): Uint8Array<ArrayBuffer> {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/** Ontsleutelt een EncString type 2 met een sleutel van 64 bytes; gooit bij een foute MAC. */
+async function decryptType2(encString: string, key: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  const m = /^2\.([^|]+)\|([^|]+)\|([^|]+)$/.exec(encString);
+  if (!m) throw new Error("Onbekend versleutelingsformaat");
+  const [iv, ct, mac] = [fromB64(m[1]), fromB64(m[2]), fromB64(m[3])];
+  if (!sameBytes(await hmacSha256(key.slice(32, 64), concat(iv, ct)), mac)) throw new Error("Verkeerde sleutel");
+  const aes = await subtle().importKey("raw", key.slice(0, 32), "AES-CBC", false, ["decrypt"]);
+  return new Uint8Array(await subtle().decrypt({ name: "AES-CBC", iv }, aes, ct));
+}
+
+/**
+ * De user key van een ontgrendelde kluis, als niet-exporteerbare WebCrypto-sleutels.
+ * Zo kan zelfs code in dezelfde pagina de ruwe sleutel niet meer uitlezen.
+ */
+export interface UserKey {
+  aes: CryptoKey;
+  mac: CryptoKey;
+}
+
+export interface UnlockParams {
+  salt: string;
+  kdf: number;
+  iterations: number;
+}
+
+/** Stap 1 van ontgrendelen: master key en login-hash afleiden (de hash gaat naar de server). */
+export async function deriveLogin(params: UnlockParams, masterPassword: string) {
+  if (params.kdf !== 0)
+    throw new Error("Deze kluis gebruikt Argon2id; ontgrendelen in de browser kan voorlopig enkel met PBKDF2.");
+  const password = enc.encode(masterPassword);
+  const masterKey = await pbkdf2(password, enc.encode(params.salt), params.iterations);
+  const loginHash = toB64(await pbkdf2(masterKey, password, 1));
+  return { masterKey, loginHash };
+}
+
+/** Stap 2: de user key uitpakken die de server na controle van de login-hash teruggeeft. */
+export async function openUserKey(masterKey: Uint8Array<ArrayBuffer>, encUserKey: string): Promise<UserKey> {
+  const stretched = concat(await hkdfExpand32(masterKey, "enc"), await hkdfExpand32(masterKey, "mac"));
+  const raw = await decryptType2(encUserKey, stretched);
+  if (raw.length !== 64) throw new Error("Onverwachte user key");
+  try {
+    return {
+      aes: await subtle().importKey("raw", raw.slice(0, 32), "AES-CBC", false, ["encrypt", "decrypt"]),
+      mac: await subtle().importKey("raw", raw.slice(32, 64), { name: "HMAC", hash: "SHA-256" }, false, [
+        "sign",
+        "verify",
+      ]),
+    };
+  } finally {
+    raw.fill(0);
+  }
+}
+
+/** Tekst versleutelen met de user key (EncString type 2, leesbaar voor de Bitwarden-SDK). */
+export async function encryptText(text: string, key: UserKey): Promise<string> {
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const ct = new Uint8Array(await subtle().encrypt({ name: "AES-CBC", iv }, key.aes, enc.encode(text)));
+  const mac = new Uint8Array(await subtle().sign("HMAC", key.mac, concat(iv, ct)));
+  return `2.${toB64(iv)}|${toB64(ct)}|${toB64(mac)}`;
+}
+
+export async function decryptText(encString: string, key: UserKey): Promise<string> {
+  const m = /^2\.([^|]+)\|([^|]+)\|([^|]+)$/.exec(encString);
+  if (!m) throw new Error("Onbekend versleutelingsformaat");
+  const [iv, ct, mac] = [fromB64(m[1]), fromB64(m[2]), fromB64(m[3])];
+  if (!(await subtle().verify("HMAC", key.mac, mac, concat(iv, ct)))) throw new Error("Notitie is beschadigd of gewijzigd");
+  return new TextDecoder().decode(await subtle().decrypt({ name: "AES-CBC", iv }, key.aes, ct));
+}
+
 /** Normalisatie zoals de clients: e-mailadres zonder spaties, kleine letters. */
+/** Bestand versleutelen als EncArrayBuffer (zoals Bitwarden-bijlagen): 2 | iv | mac | ct. */
+export async function encryptBytes(data: Uint8Array<ArrayBuffer>, key: UserKey): Promise<Uint8Array<ArrayBuffer>> {
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const ct = new Uint8Array(await subtle().encrypt({ name: "AES-CBC", iv }, key.aes, data));
+  const mac = new Uint8Array(await subtle().sign("HMAC", key.mac, concat(iv, ct)));
+  return concat(new Uint8Array([2]), iv, mac, ct);
+}
+
+export async function decryptBytes(buf: Uint8Array<ArrayBuffer>, key: UserKey): Promise<Uint8Array<ArrayBuffer>> {
+  if (buf.length < 65 || buf[0] !== 2) throw new Error("Onbekend versleutelingsformaat");
+  const iv = buf.slice(1, 17);
+  const mac = buf.slice(17, 49);
+  const ct = buf.slice(49);
+  if (!(await subtle().verify("HMAC", key.mac, mac, concat(iv, ct)))) throw new Error("Bijlage is beschadigd of gewijzigd");
+  return new Uint8Array(await subtle().decrypt({ name: "AES-CBC", iv }, key.aes, ct));
+}
+
 export function normalizeSalt(email: string): string {
   return email.trim().toLowerCase();
 }

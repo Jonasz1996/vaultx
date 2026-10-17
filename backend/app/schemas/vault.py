@@ -110,11 +110,14 @@ class VaultStatusOut(BaseModel):
     kdf_iterations: int | None = None
     kdf_memory: int | None = None
     kdf_parallelism: int | None = None
+    # Salt voor de sleutelafleiding bij het ontgrendelen in de browser (fase 7).
+    kdf_salt: str | None = None
     enrolled_at: datetime | None = None
     revision_date: datetime | None = None
     item_count: int = 0
     trash_count: int = 0
     folder_count: int = 0
+    note_count: int = 0
     devices: list[VaultDeviceOut] = []
 
 
@@ -126,3 +129,14 @@ class VaultUserSummary(BaseModel):
     enrolled_at: datetime | None = None
     item_count: int = 0
     active_devices: int = 0
+
+
+class VaultUnlock(BaseModel):
+    """Ontgrendelen in de VaultX-webinterface, bv. om notities te lezen (fase 7)."""
+
+    master_password_hash: str = Field(max_length=128, description="base64(PBKDF2(master key, wachtwoord, 1))")
+
+
+class VaultUnlockOut(BaseModel):
+    # User key, versleuteld met de master key: de browser pakt hem zelf uit.
+    user_key: str

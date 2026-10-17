@@ -12,6 +12,7 @@ from app.models.catalog import (
     NpmConnection,
 )
 from app.models.membership import Membership, MembershipSource, OrgRole, TeamRole
+from app.models.notes import VaultNote, VaultNoteFile, VaultNoteVersion
 from app.models.organization import Organization, Team
 from app.models.session import UserSession
 from app.models.user import User
@@ -42,4 +43,7 @@ __all__ = [
     "VaultCipher",
     "VaultDevice",
     "VaultFolder",
+    "VaultNote",
+    "VaultNoteFile",
+    "VaultNoteVersion",
 ]

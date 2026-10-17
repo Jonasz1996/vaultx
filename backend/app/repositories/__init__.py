@@ -10,6 +10,11 @@ from app.repositories.catalog import (
     NpmConnectionRepository,
 )
 from app.repositories.memberships import MembershipRepository
+from app.repositories.notes import (
+    VaultNoteFileRepository,
+    VaultNoteRepository,
+    VaultNoteVersionRepository,
+)
 from app.repositories.organizations import OrganizationRepository, TeamRepository
 from app.repositories.sessions import SessionRepository
 from app.repositories.users import UserRepository
@@ -37,4 +42,7 @@ __all__ = [
     "VaultCipherRepository",
     "VaultDeviceRepository",
     "VaultFolderRepository",
+    "VaultNoteFileRepository",
+    "VaultNoteRepository",
+    "VaultNoteVersionRepository",
 ]
