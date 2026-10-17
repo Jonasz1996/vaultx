@@ -228,3 +228,84 @@ async def test_cli_resets_vault_two_factor(make_client):
     assert (await token(c, account.email, account.password_hash)).status_code == 200
     with pytest.raises(VaultXError):
         await cli.reset_vault_two_factor("jonas@example.com")
+
+
+def _enc_blob(account, content: bytes) -> bytes:
+    """EncArrayBuffer zoals de clients: 2 | iv | mac | ciphertext."""
+    import base64
+
+    enc = account.enc_bytes(content)  # "2.iv|ct|mac"
+    iv, ct, mac = (base64.b64decode(x) for x in enc[2:].split("|"))
+    return bytes([2]) + iv + mac + ct
+
+
+async def test_attachment_lifecycle(make_client):
+    from urllib.parse import urlsplit
+
+    c = await make_client()
+    account = await enroll(c, "jonas")
+    h = await bearer(c, account)
+    item = (await c.post("/api/ciphers", json=login_item(account, "NAS", "admin", "pw"), headers=h)).json()
+    blob = _enc_blob(account, b"inhoud van config.yml")
+    body = {"fileName": account.enc("config.yml"), "key": account.enc("k" * 64), "fileSize": len(blob)}
+
+    r = await c.post(f"/api/ciphers/{item['id']}/attachment/v2", json=body, headers=h)
+    assert r.status_code == 200, r.text
+    up = r.json()
+    aid = up["attachmentId"]
+    assert up["fileUploadType"] == 0 and up["url"].endswith(f"/attachment/{aid}")
+    assert [x["id"] for x in up["cipherResponse"]["attachments"]] == [aid]
+    sync = (await c.get("/api/sync", headers=h)).json()
+    assert sync["ciphers"][0]["attachments"] is None  # nog niet geüpload
+
+    # Verkeerde grootte of onversleutelde inhoud wordt geweigerd
+    files = {"data": ("x", b"plain text", "application/octet-stream")}
+    r = await c.post(f"/api/ciphers/{item['id']}/attachment/{aid}", files=files, headers=h)
+    assert r.status_code == 400
+    files = {"data": (body["fileName"], blob, "application/octet-stream")}
+    r = await c.post(f"/api/ciphers/{item['id']}/attachment/{aid}", files=files, headers=h)
+    assert r.status_code == 200, r.text
+    assert (
+        await c.post(f"/api/ciphers/{item['id']}/attachment/{aid}", files=files, headers=h)
+    ).status_code == 400
+
+    sync = (await c.get("/api/sync", headers=h)).json()
+    att = sync["ciphers"][0]["attachments"][0]
+    assert att["id"] == aid and att["size"] == str(len(blob)) and att["fileName"] == body["fileName"]
+
+    info = (await c.get(f"/api/ciphers/{item['id']}/attachment/{aid}", headers=h)).json()
+    url = urlsplit(info["url"])
+    r = await c.get(f"{url.path}?{url.query}")  # zonder login, met token
+    assert r.status_code == 200 and r.content == blob
+    assert (await c.get(url.path + "?token=1.abc")).status_code == 404
+    other = info["url"].replace(aid, item["id"])  # token hoort bij één bijlage
+    assert (await c.get(urlsplit(other).path + "?" + url.query)).status_code == 404
+
+    # Een andere gebruiker ziet of wist ze niet
+    e = await make_client()
+    eve = await enroll(e, "eve")
+    eh = await bearer(e, eve)
+    assert (await e.get(f"/api/ciphers/{item['id']}/attachment/{aid}", headers=eh)).status_code == 404
+    assert (await e.delete(f"/api/ciphers/{item['id']}/attachment/{aid}", headers=eh)).status_code == 404
+
+    r = await c.delete(f"/api/ciphers/{item['id']}/attachment/{aid}", headers=h)
+    assert r.status_code == 200 and r.json()["cipher"]["attachments"] is None
+    assert (await c.get(f"{url.path}?{url.query}")).status_code == 404
+
+
+async def test_attachment_limits(make_client, monkeypatch):
+    from app.core.config import get_settings
+
+    c = await make_client()
+    account = await enroll(c, "jonas")
+    h = await bearer(c, account)
+    item = (await c.post("/api/ciphers", json=login_item(account, "NAS", "admin", "pw"), headers=h)).json()
+    name = account.enc("groot.iso")
+    too_big = {"fileName": name, "fileSize": 101 * 1024 * 1024}
+    r = await c.post(f"/api/ciphers/{item['id']}/attachment/v2", json=too_big, headers=h)
+    assert r.status_code == 400 and "100 MB" in r.json()["message"]
+    monkeypatch.setattr(get_settings(), "vault_attachment_storage_mb", 1)
+    ok = {"fileName": name, "fileSize": 600 * 1024}
+    assert (await c.post(f"/api/ciphers/{item['id']}/attachment/v2", json=ok, headers=h)).status_code == 200
+    r = await c.post(f"/api/ciphers/{item['id']}/attachment/v2", json=ok, headers=h)
+    assert r.status_code == 400 and "vol" in r.json()["message"]

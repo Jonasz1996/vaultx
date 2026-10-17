@@ -122,6 +122,15 @@ class FolderIn(_CamelIn):
     name: str = Field(min_length=1, max_length=10_000)
 
 
+class AttachmentIn(_CamelIn):
+    """POST /api/ciphers/{id}/attachment/v2: naam en sleutel versleuteld, grootte van de blob."""
+
+    file_name: str = Field(alias="fileName", min_length=1, max_length=4096)
+    key: str | None = Field(None, max_length=1024)
+    file_size: int = Field(alias="fileSize", ge=1)
+    admin_request: bool = Field(False, alias="adminRequest")
+
+
 class ImportFolderIn(_CamelIn):
     id: UUID | None = None
     name: str = Field(min_length=1, max_length=10_000)
@@ -270,7 +279,7 @@ def folder_json(folder: VaultFolder) -> dict[str, Any]:
     }
 
 
-def cipher_json(cipher: VaultCipher) -> dict[str, Any]:
+def cipher_json(cipher: VaultCipher, attachments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {
         **cipher.data,
         "id": str(cipher.id),
@@ -283,7 +292,7 @@ def cipher_json(cipher: VaultCipher) -> dict[str, Any]:
         "permissions": {"delete": True, "restore": True},
         "organizationUseTotp": False,
         "collectionIds": [],
-        "attachments": None,
+        "attachments": attachments or None,
         "revisionDate": iso(cipher.revision_date),
         "creationDate": iso(cipher.created_at),
         "deletedDate": iso(cipher.deleted_at),
@@ -293,14 +302,14 @@ def cipher_json(cipher: VaultCipher) -> dict[str, Any]:
 
 
 def sync_json(
-    user: User, account: VaultAccount, folders: list[VaultFolder], ciphers: list[VaultCipher]
+    user: User, account: VaultAccount, folders: list[VaultFolder], ciphers: list[dict[str, Any]]
 ) -> dict[str, Any]:
     return {
         "profile": profile_json(user, account),
         "folders": [folder_json(f) for f in folders],
         "collections": [],
         "policies": [],
-        "ciphers": [cipher_json(c) for c in ciphers],
+        "ciphers": ciphers,
         "domains": {"equivalentDomains": [], "globalEquivalentDomains": [], "object": "domains"},
         "sends": [],
         "userDecryption": {

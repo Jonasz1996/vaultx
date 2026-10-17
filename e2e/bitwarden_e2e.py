@@ -381,6 +381,21 @@ def main() -> None:
         assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-1"
         assert user.get("/api/v1/me/vault").json()["two_factor_enabled"] is True
 
+        step("Fase 9: bijlage toevoegen, downloaden en verwijderen met bw")
+        attach_src = Path(appdata) / "router-backup.cfg"
+        attach_src.write_bytes(b"hostname router\ninterface eth0\n" + os.urandom(2048))
+        proxmox_id = bw.json("list", "items", "--search", "Proxmox")[0]["id"]
+        with_att = bw.json("create", "attachment", "--file", str(attach_src), "--itemid", proxmox_id)
+        att = with_att["attachments"][0]
+        assert att["fileName"] == "router-backup.cfg", att
+        bw.run("sync", "--force")
+        out = Path(appdata) / "terug.cfg"
+        bw.run("get", "attachment", "router-backup.cfg", "--itemid", proxmox_id, "--output", str(out))
+        assert out.read_bytes() == attach_src.read_bytes(), "bijlage komt niet ongeschonden terug"
+        bw.run("delete", "attachment", att["id"], "--itemid", proxmox_id)
+        bw.run("sync", "--force")
+        assert not bw.json("get", "item", proxmox_id).get("attachments"), "bijlage niet verwijderd"
+
         step("Gebruiker deactiveren in VaultX: de kluis gaat dicht op alle apparaten")
         admin = httpx.Client(base_url=base, verify=cert)
         login(admin, fake, "admin-e2e", "admin-e2e@example.com", ["vaultx-admins"])

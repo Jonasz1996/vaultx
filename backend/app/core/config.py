@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     # Websitepictogrammen voor de Bitwarden-apps (fase 9): VaultX haalt ze zelf op bij de site.
     # false = de apps tonen een standaardicoon en VaultX maakt geen uitgaande verbindingen.
     vault_icons: bool = True
+    # Bijlagen bij items in de Bitwarden-apps (fase 9): maximum per bestand en totaal per gebruiker.
+    # Hou client_max_body_size in nginx voor /api/ciphers/.../attachment minstens even groot.
+    vault_attachment_max_mb: int = Field(100, ge=1, le=500)
+    vault_attachment_storage_mb: int = Field(2048, ge=1)
     # Bijlagen in notities (fase 7): maximale grootte per bestand en totaal per gebruiker.
     # Hou client_max_body_size in nginx voor /api/v1/me/notes minstens even groot.
     vault_note_file_max_mb: int = Field(25, ge=1, le=512)

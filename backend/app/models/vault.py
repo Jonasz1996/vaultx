@@ -22,7 +22,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, deferred, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, new_uuid, utcnow
 
@@ -159,4 +159,30 @@ class VaultCipher(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-__all__ = ["KdfType", "VaultAccount", "VaultCipher", "VaultDevice", "VaultFolder"]
+class VaultAttachment(Base):
+    """Bijlage bij een kluisitem (fase 9), versleuteld door de Bitwarden-client.
+
+    `data` is een EncArrayBuffer; `key` is de bestandssleutel, versleuteld met de user
+    key (of de itemsleutel); `file_name` is een EncString. Tot de client de inhoud
+    uploadt, is `data` leeg en telt de bijlage niet mee in het item.
+    """
+
+    __tablename__ = "vault_attachments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    cipher_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vault_ciphers.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vault_accounts.user_id", ondelete="CASCADE"), index=True
+    )
+    file_name: Mapped[str] = mapped_column(Text)
+    key: Mapped[str | None] = mapped_column(Text)
+    # Grootte van de versleutelde inhoud, zoals de client ze aankondigt.
+    size: Mapped[int] = mapped_column(BigInteger)
+    data: Mapped[bytes | None] = deferred(mapped_column(LargeBinary))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+__all__ = ["KdfType", "VaultAccount", "VaultAttachment", "VaultCipher", "VaultDevice", "VaultFolder"]
