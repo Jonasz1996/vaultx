@@ -17,6 +17,7 @@ klare tekst van de notities staat.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -315,8 +316,9 @@ def main() -> None:
             imgs = page.locator(".preview img.note-img")
             expect(imgs).to_have_count(2, timeout=15_000)
             for i in range(2):
-                assert imgs.nth(i).get_attribute("src").startswith("data:image/png;base64,")
-            assert imgs.first.get_attribute("width") == "80"
+                expect(imgs.nth(i)).to_have_attribute("src", re.compile(r"^data:image/png;base64,"))
+            # Het voorbeeld rendert tijdens het typen mee: wachten tot "|80" volledig verwerkt is.
+            expect(imgs.first).to_have_attribute("width", "80")
             expect(imgs.nth(1)).to_have_js_property("naturalWidth", 320)
             with page.expect_download() as dl:
                 page.locator(".preview .file-link", has_text="wachtwoorden-router.txt").click()
