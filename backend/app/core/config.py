@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     session_idle_minutes: int = 120
     cookie_secure: bool = True
 
+    # Gewone login met een VaultX-wachtwoord (fase 8), naast Authentik. Accounts en wachtwoorden
+    # maakt een beheerder aan; er is geen open registratie.
+    local_login_enabled: bool = True
+    password_min_length: int = Field(12, ge=8, le=128)
+    # Na zoveel foute wachtwoorden na elkaar is wachtwoordlogin voor dat account even vergrendeld.
+    local_login_max_failed: int = Field(5, ge=1)
+    local_login_lockout_minutes: int = Field(15, ge=1)
+
     # NPM-connector
     # Elke zoveel minuten alle actieve NPM-koppelingen synchroniseren. 0 = enkel handmatig.
     npm_sync_interval_minutes: int = Field(15, ge=0)

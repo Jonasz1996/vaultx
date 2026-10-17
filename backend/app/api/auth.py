@@ -1,4 +1,5 @@
-"""Login, callback en logout via Authentik (OIDC authorization code + PKCE)."""
+"""Login, callback en logout via Authentik (OIDC authorization code + PKCE), plus de gewone
+login met een VaultX-wachtwoord (fase 8)."""
 
 from __future__ import annotations
 
@@ -10,16 +11,18 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CSRF_HEADER, DbSession, MetaDep, OIDCDep, SettingsDep
 from app.core.config import Settings
-from app.core.errors import PermissionDeniedError
+from app.core.errors import NotFoundError, PermissionDeniedError
 from app.core.security import new_token, pkce_challenge
 from app.repositories import UserRepository
 from app.services.audit import AuditService
 from app.services.identity import IdentityService
 from app.services.oidc import OIDCError
+from app.services.password_login import MAX_PASSWORD_LENGTH, PasswordLoginService
 from app.services.principal import Actor
 from app.services.sessions import SessionService
 
@@ -142,6 +145,11 @@ async def callback(
 
     resp = RedirectResponse(f"{settings.public_url}{saved['next']}", status_code=303)
     resp.delete_cookie(STATE_COOKIE, path="/auth")
+    _session_cookie(resp, settings, token)
+    return resp
+
+
+def _session_cookie(resp: Response, settings: Settings, token: str) -> None:
     resp.set_cookie(
         settings.session_cookie_name,
         token,
@@ -151,6 +159,37 @@ async def callback(
         secure=settings.cookie_secure,
         samesite="lax",
     )
+
+
+@router.get("/methods", summary="Welke loginmethodes de loginpagina toont")
+async def methods(settings: SettingsDep) -> dict:
+    return {"authentik": True, "password": settings.local_login_enabled}
+
+
+class PasswordLogin(BaseModel):
+    login: str = Field(min_length=1, max_length=320, description="Gebruikersnaam of e-mailadres")
+    password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH)
+    next: str | None = None
+
+
+@router.post(
+    "/password",
+    summary="Inloggen met gebruikersnaam en VaultX-wachtwoord",
+    responses={401: {"description": "Onjuiste gegevens"}, 429: {"description": "Tijdelijk vergrendeld"}},
+)
+async def password_login(
+    data: PasswordLogin, request: Request, db: DbSession, settings: SettingsDep, meta: MetaDep
+) -> Response:
+    if not settings.local_login_enabled:
+        raise NotFoundError("Inloggen met een wachtwoord staat uit")
+    if request.headers.get(CSRF_HEADER) != "1":
+        # Ook hier: geen login vanuit een formulier op een andere site (login-CSRF).
+        raise PermissionDeniedError("CSRF-header ontbreekt")
+    user = await PasswordLoginService(db, settings).authenticate(data.login, data.password, meta)
+    token, _ = await SessionService(db, settings).create(user, meta=meta, auth_method="password")
+    await db.commit()
+    resp = JSONResponse({"redirect_url": f"{settings.public_url}{safe_next(data.next)}"})
+    _session_cookie(resp, settings, token)
     return resp
 
 
@@ -163,20 +202,25 @@ async def logout(
     sessions = SessionService(db, settings)
     token = request.cookies.get(settings.session_cookie_name)
     id_token = None
+    password_session = False
     resolved = await sessions.resolve(token) if token else None
     if resolved:
         id_token = resolved.session.id_token
+        password_session = resolved.session.auth_method == "password"
         await sessions.revoke(resolved.session, "logout")
         await AuditService(db).record(
             "auth.logout", Actor.for_user(resolved.user, meta), target_type="user", target_id=resolved.user.id
         )
         await db.commit()
-    try:
-        redirect = await oidc.end_session_url(
-            id_token_hint=id_token, post_logout_redirect_uri=f"{settings.public_url}/login?logged_out=1"
-        )
-    except OIDCError:
-        redirect = None
+    redirect = None
+    if not password_session:
+        # Wie met een wachtwoord inlogde, heeft geen Authentik-sessie om af te sluiten.
+        try:
+            redirect = await oidc.end_session_url(
+                id_token_hint=id_token, post_logout_redirect_uri=f"{settings.public_url}/login?logged_out=1"
+            )
+        except OIDCError:
+            redirect = None
     resp = JSONResponse({"redirect_url": redirect or f"{settings.public_url}/login?logged_out=1"})
     resp.delete_cookie(settings.session_cookie_name, path="/")
     return resp

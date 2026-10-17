@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router";
+import { Link, NavLink, Outlet } from "react-router";
 import { logout } from "../api/client";
 import { useMe } from "../api/hooks";
 import { userLabel } from "../format";
@@ -37,7 +37,9 @@ export function Layout() {
         </nav>
         {me && (
           <div className="whoami">
-            <div className="whoami-name">{userLabel(me)}</div>
+            <Link className="whoami-name" to={`/users/${me.id}`} title="Mijn account">
+              {userLabel(me)}
+            </Link>
             <div className="muted small">{me.is_admin ? "Instantiebeheerder" : me.email}</div>
             <button className="btn btn-ghost" onClick={() => void logout()}>
               Uitloggen

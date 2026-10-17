@@ -1,9 +1,10 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
-import type { Page, User } from "../api/types";
-import { Badge, Card, ErrorBox, Loading, PageHeader } from "../components/ui";
+import type { Page, User, UserDetail } from "../api/types";
+import { CreateAccountForm, type NewAccount } from "../components/accounts";
+import { Badge, Card, ErrorBox, Loading, Modal, PageHeader } from "../components/ui";
 import { relative, userLabel } from "../format";
 
 const PAGE = 25;
@@ -11,6 +12,21 @@ const PAGE = 25;
 export function UsersPage() {
   const [q, setQ] = useState("");
   const [offset, setOffset] = useState(0);
+  const [creating, setCreating] = useState(false);
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const methods = useQuery({
+    queryKey: ["auth-methods"],
+    queryFn: () => api.get<{ password: boolean }>("/auth/methods"),
+  });
+  const create = useMutation({
+    mutationFn: (v: NewAccount) => api.post<UserDetail>("/api/v1/users", v),
+    onSuccess: (u) => {
+      void qc.invalidateQueries({ queryKey: ["users"] });
+      setCreating(false);
+      navigate(`/users/${u.id}`);
+    },
+  });
   const { data, error, isLoading } = useQuery({
     queryKey: ["users", q, offset],
     queryFn: () => api.get<Page<User>>("/api/v1/users", { q, limit: PAGE, offset }),
@@ -20,8 +36,18 @@ export function UsersPage() {
     <>
       <PageHeader
         title="Gebruikers"
-        subtitle="Gebruikers worden aangemaakt bij hun eerste login via Authentik. Beheerdersrechten volgen de Authentik-groepen."
+        subtitle="Authentik-gebruikers verschijnen bij hun eerste login. Gewone accounts met een VaultX-wachtwoord maak je hier zelf aan."
+        actions={
+          methods.data?.password && (
+            <button className="btn btn-primary" onClick={() => setCreating(true)}>
+              Account aanmaken
+            </button>
+          )
+        }
       />
+      <Modal title="Gewoon account aanmaken" open={creating} onClose={() => setCreating(false)}>
+        <CreateAccountForm onSubmit={(v) => create.mutate(v)} error={create.error} pending={create.isPending} />
+      </Modal>
       <Card
         actions={
           <input
@@ -46,6 +72,7 @@ export function UsersPage() {
                   <th>Naam</th>
                   <th>E-mail</th>
                   <th>Status</th>
+                  <th>Inloggen</th>
                   <th>Authentik-groepen</th>
                   <th>Laatste login</th>
                 </tr>
@@ -59,6 +86,9 @@ export function UsersPage() {
                     </td>
                     <td>{u.email}</td>
                     <td>{u.is_active ? <Badge tone="good">actief</Badge> : <Badge tone="bad">gedeactiveerd</Badge>}</td>
+                    <td className="nowrap">
+                      {u.has_authentik && <Badge tone="info">Authentik</Badge>} {u.has_password && <Badge>wachtwoord</Badge>}
+                    </td>
                     <td className="small">{u.idp_groups?.join(", ")}</td>
                     <td className="nowrap">{relative(u.last_login_at)}</td>
                   </tr>

@@ -31,16 +31,26 @@ export interface User {
   idp_groups?: string[];
   last_login_at?: string | null;
   created_at?: string;
+  admin_granted?: boolean;
+  has_password?: boolean;
+  has_authentik?: boolean;
 }
 
 export interface UserDetail extends User {
-  oidc_issuer: string;
-  oidc_subject: string;
+  oidc_issuer: string | null;
+  oidc_subject: string | null;
+  admin_granted: boolean;
+  has_password: boolean;
+  has_authentik: boolean;
+  password_changed_at: string | null;
+  locked_until: string | null;
   memberships: MembershipBrief[];
 }
 
 export interface Me extends User {
   is_admin: boolean;
+  has_password: boolean;
+  has_authentik: boolean;
   memberships: MembershipBrief[];
   auth_method: string;
 }
@@ -52,6 +62,7 @@ export interface Session {
   created_at: string;
   last_seen_at: string;
   expires_at: string;
+  auth_method: "oidc" | "password";
   current: boolean;
 }
 

@@ -35,6 +35,16 @@ def _groups_from_claims(claims: dict[str, Any]) -> list[str]:
     return sorted({str(g) for g in groups if g})
 
 
+def effective_admin(user: User, settings: Settings) -> bool:
+    """Instantiebeheerder via een Authentik-beheerdersgroep (laatst ontvangen groepen) of omdat
+    een beheerder het in VaultX toekende. Zo verliest een gewoon account zijn rechten niet en
+    haalt een Authentik-login de in VaultX toegekende rechten niet weg."""
+    via_group = user.oidc_issuer is not None and any(
+        g in settings.oidc_admin_groups for g in (user.idp_groups or [])
+    )
+    return bool(user.admin_granted) or via_group
+
+
 class IdentityService:
     def __init__(self, db: AsyncSession, settings: Settings) -> None:
         self.db = db
@@ -51,7 +61,9 @@ class IdentityService:
         user = await self.users.by_identity(issuer, subject)
         created = user is None
         if user is None:
-            user = self.users.add(User(oidc_issuer=issuer, oidc_subject=subject, idp_groups=[]))
+            user = self.users.add(
+                User(oidc_issuer=issuer, oidc_subject=subject, idp_groups=[], admin_granted=False)
+            )
 
         if not created and not user.is_active:
             await self.audit.record(
@@ -71,8 +83,8 @@ class IdentityService:
         user.username = claims.get("preferred_username") or user.username
         user.display_name = claims.get("name") or user.display_name
         was_admin = user.is_admin
-        user.is_admin = any(g in self.settings.oidc_admin_groups for g in groups)
         user.idp_groups = groups
+        user.is_admin = effective_admin(user, self.settings)
         user.last_login_at = datetime.now(UTC)
         await self.db.flush()
 

@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.deps import CurrentPrincipal, DbSession, SettingsDep
-from app.schemas.users import MeOut, SessionOut, UserOut
+from app.schemas.users import MeOut, PasswordChange, SessionOut, UserOut
 from app.services.users import UserService
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -23,3 +23,11 @@ async def my_sessions(p: CurrentPrincipal, db: DbSession, settings: SettingsDep)
     return [
         SessionOut.model_validate(s).model_copy(update={"current": s.id == p.session_id}) for s in sessions
     ]
+
+
+@router.post("/password", summary="Mijn VaultX-wachtwoord wijzigen")
+async def change_my_password(
+    data: PasswordChange, p: CurrentPrincipal, db: DbSession, settings: SettingsDep
+) -> dict:
+    await UserService(db, settings).change_own_password(p, data)
+    return {"ok": True}
