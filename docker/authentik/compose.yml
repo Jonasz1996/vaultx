@@ -1,0 +1,70 @@
+# Lokale Authentik voor ontwikkeling en end-to-end tests van VaultX.
+# NIET voor productie: gebruik daar je bestaande Authentik.
+#
+#   docker compose -f docker/authentik/compose.yml up -d
+#   -> http://localhost:9000  (akadmin / zie AUTHENTIK_BOOTSTRAP_PASSWORD)
+#
+# De blueprint vaultx-dev.yaml maakt de OIDC-provider, applicatie, groepen
+# en twee testgebruikers aan (alice = beheerder, bob = gewoon lid).
+name: vaultx-authentik
+
+x-authentik-env: &authentik-env
+  AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:-dev-only-authentik-secret-key-change-me-0123456789}
+  AUTHENTIK_POSTGRESQL__HOST: ak-db
+  AUTHENTIK_POSTGRESQL__USER: authentik
+  AUTHENTIK_POSTGRESQL__NAME: authentik
+  AUTHENTIK_POSTGRESQL__PASSWORD: authentik
+  AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD:-akadmin-dev}
+  AUTHENTIK_BOOTSTRAP_EMAIL: admin@vaultx.local
+  AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+  AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+  # Expliciet IPv4: op hosts zonder IPv6 faalt het standaardadres [::]
+  AUTHENTIK_LISTEN__HTTP: 0.0.0.0:9000
+  AUTHENTIK_LISTEN__HTTPS: 0.0.0.0:9443
+  AUTHENTIK_LISTEN__METRICS: 0.0.0.0:9300
+  # Waar Authentik VaultX bereikt voor back-channel logout
+  VAULTX_BACKCHANNEL_URL: ${VAULTX_BACKCHANNEL_URL:-http://host.docker.internal:8000/auth/backchannel-logout}
+  VAULTX_PUBLIC_URL: ${VAULTX_PUBLIC_URL:-http://localhost:8080}
+
+services:
+  ak-db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD: authentik
+    volumes:
+      - ak-db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik -d authentik"]
+      interval: 5s
+      retries: 20
+
+  server:
+    image: ${AUTHENTIK_IMAGE:-authentik/server}:${AUTHENTIK_TAG:-2026.8.3}
+    command: server
+    environment: *authentik-env
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./blueprints:/blueprints/custom:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      ak-db:
+        condition: service_healthy
+
+  worker:
+    image: ${AUTHENTIK_IMAGE:-authentik/server}:${AUTHENTIK_TAG:-2026.8.3}
+    command: worker
+    environment: *authentik-env
+    volumes:
+      - ./blueprints:/blueprints/custom:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      ak-db:
+        condition: service_healthy
+
+volumes:
+  ak-db:
