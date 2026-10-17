@@ -1,6 +1,6 @@
 # VaultX admin UI (React/Vite) + nginx die ook de backend proxyt.
 #   docker build -f docker/frontend.Dockerfile -t vaultx-web .
-FROM node:22-alpine AS build
+FROM node:25-alpine AS build
 WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
