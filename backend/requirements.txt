@@ -11,3 +11,4 @@ joserfc>=1.7,<2
 cryptography>=45
 itsdangerous>=2.2,<3
 python-multipart>=0.0.20
+argon2-cffi>=25.1,<26

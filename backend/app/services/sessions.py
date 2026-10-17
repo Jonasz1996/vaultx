@@ -32,7 +32,13 @@ class SessionService:
         self.users = UserRepository(db)
 
     async def create(
-        self, user: User, *, meta: RequestMeta, oidc_sid: str | None, id_token: str | None
+        self,
+        user: User,
+        *,
+        meta: RequestMeta,
+        oidc_sid: str | None = None,
+        id_token: str | None = None,
+        auth_method: str = "oidc",
     ) -> tuple[str, UserSession]:
         """Maakt een sessie aan (zonder commit) en geeft het ruwe cookietoken terug."""
         now = datetime.now(UTC)
@@ -42,6 +48,7 @@ class SessionService:
             UserSession(
                 token_hash=hash_token(token),
                 user_id=user.id,
+                auth_method=auth_method,
                 oidc_sid=oidc_sid,
                 id_token=id_token,
                 ip_address=meta.ip_address,
@@ -83,6 +90,13 @@ class SessionService:
         return len(
             await self.repo.revoke_where(UserSession.user_id == user_id, now=datetime.now(UTC), reason=reason)
         )
+
+    async def revoke_password_sessions(self, user_id: UUID, reason: str, *, keep: UUID | None = None) -> int:
+        """Trekt de sessies in die met een wachtwoord begonnen (Authentik-sessies blijven)."""
+        where = [UserSession.user_id == user_id, UserSession.auth_method == "password"]
+        if keep is not None:
+            where.append(UserSession.id != keep)
+        return len(await self.repo.revoke_where(*where, now=datetime.now(UTC), reason=reason))
 
     async def revoke_by_sid(self, sid: str, reason: str) -> list[UUID]:
         return await self.repo.revoke_where(UserSession.oidc_sid == sid, now=datetime.now(UTC), reason=reason)

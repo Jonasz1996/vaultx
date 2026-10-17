@@ -20,6 +20,8 @@ class UserSession(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
+    # Hoe deze sessie begon: 'oidc' (Authentik) of 'password' (gewone VaultX-login).
+    auth_method: Mapped[str] = mapped_column(String(16), default="oidc", server_default="oidc")
     # 'sid'-claim van Authentik, voor back-channel logout.
     oidc_sid: Mapped[str | None] = mapped_column(String(255), index=True)
     # Nodig als id_token_hint bij RP-initiated logout.

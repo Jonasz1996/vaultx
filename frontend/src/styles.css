@@ -66,7 +66,8 @@ pre { font-size: 12px; background: var(--surface-2); padding: 8px; border-radius
 .sidebar nav a:hover { background: var(--surface-2); text-decoration: none; }
 .sidebar nav a.active { background: var(--info-bg); color: var(--info-fg); }
 .whoami { margin-top: auto; border-top: 1px solid var(--border); padding: 12px 6px 0; display: flex; flex-direction: column; gap: 4px; }
-.whoami-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.whoami-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; color: inherit; text-decoration: none; }
+.whoami-name:hover { text-decoration: underline; }
 .content { padding: 28px 32px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 18px; }
 
 .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
@@ -473,3 +474,12 @@ details.callout summary { color: inherit; }
 .canvas-edge[class*="canvas-c"] .canvas-edge-line { stroke: var(--cc); }
 .md-toolbar .canvas-swatch[class*="canvas-c"] { background: var(--cc); border-color: var(--cc); }
 .canvas-icon { color: var(--muted); }
+
+/* Loginpagina met wachtwoordformulier (fase 8) */
+.login-form { width: 100%; text-align: left; }
+.login-divider { width: 100%; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.login-divider::before, .login-divider::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+.input-row { display: flex; gap: 6px; }
+.input-row input { flex: 1; min-width: 0; }
+.actions-inline { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; flex-basis: 100%; word-break: normal; }
+.page-header .actions { flex-shrink: 0; }

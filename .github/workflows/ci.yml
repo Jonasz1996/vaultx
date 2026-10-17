@@ -295,6 +295,10 @@ jobs:
         env:
           VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
         run: python e2e/notes_e2e.py notes-shots
+      - name: Gewone login in Chromium
+        env:
+          VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
+        run: python e2e/password_login_e2e.py notes-shots/login
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -14,6 +14,37 @@ class UserRepository(Repository[User]):
             select(User).where(User.oidc_issuer == issuer, User.oidc_subject == subject)
         )
 
+    async def by_login(self, login: str) -> User | None:
+        """Account met wachtwoordlogin op gebruikersnaam of e-mail (hoofdletterongevoelig).
+        Bij twijfel (de naam past bij meer dan één account) geen resultaat."""
+        name = login.strip().lower()
+        if not name:
+            return None
+        rows = (
+            await self.db.scalars(
+                select(User).where(
+                    User.password_hash.is_not(None),
+                    or_(func.lower(User.username) == name, func.lower(User.email) == name),
+                )
+            )
+        ).all()
+        by_username = [u for u in rows if (u.username or "").lower() == name]
+        if len(by_username) == 1:
+            return by_username[0]
+        return rows[0] if len(rows) == 1 else None
+
+    async def login_name_taken(self, names: set[str], *, exclude_id: UUID | None = None) -> bool:
+        """Is een van deze namen al de gebruikersnaam of het e-mailadres van een ander account?"""
+        lowered = {n.lower() for n in names if n}
+        if not lowered:
+            return False
+        stmt = select(User.id).where(
+            or_(func.lower(User.username).in_(lowered), func.lower(User.email).in_(lowered))
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(User.id != exclude_id)
+        return await self.db.scalar(stmt.limit(1)) is not None
+
     async def search(
         self,
         *,

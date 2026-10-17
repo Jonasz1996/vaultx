@@ -36,7 +36,12 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const detail = typeof data.detail === "string" ? data.detail : res.statusText;
+    const detail =
+      typeof data.detail === "string"
+        ? data.detail
+        : Array.isArray(data.detail) && data.detail[0]?.msg
+          ? `Ongeldige invoer (${data.detail[0].loc?.slice(-1)[0] ?? "veld"}): ${data.detail[0].msg}`
+          : res.statusText;
     throw new ApiError(res.status, data.error ?? "error", detail);
   }
   return data as T;
@@ -46,6 +51,7 @@ export const api = {
   get: <T>(path: string, query?: Query) => request<T>("GET", path, undefined, query),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, body ?? {}),
   patch: <T>(path: string, body: unknown) => request<T>("PATCH", path, body),
+  put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),
   delete: (path: string) => request<void>("DELETE", path),
 };
 

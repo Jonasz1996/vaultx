@@ -6,8 +6,16 @@ fundering), **fase 1** (NPM-connector en applicatiecatalogus), **fase 2**
 (een persoonlijke kluis voor de officiële Bitwarden®-clients), **fase 3**
 (Authentik-bescherming zetten in NPM), **fase 4** (ook de Authentik-kant
 automatisch aanmaken), **fase 5** (automatische login: wie al bij Authentik
-is aangemeld, komt meteen in de app), **fase 6** (app publiceren) en **fase 7**
-(versleutelde notities zoals in Obsidian).
+is aangemeld, komt meteen in de app), **fase 6** (app publiceren), **fase 7**
+(versleutelde notities zoals in Obsidian) en **fase 8** (inloggen met een
+gewoon account, naast Authentik).
+
+**Fase 8**
+
+- Inloggen met gebruikersnaam (of e-mail) en een VaultX-wachtwoord, naast "Inloggen met Authentik"
+- Een beheerder maakt gewone accounts aan (geen open registratie), kan ze beheerder maken, en kan ook een Authentik-account een wachtwoord geven: hetzelfde account en dezelfde kluis, met beide logins
+- Argon2id, tijdelijke vergrendeling na 5 foute wachtwoorden, alles in de auditlog; noodtoegang vanaf de commandolijn als Authentik plat ligt
+- Getest in Chromium (ook in CI). Zie [docs/accounts.md](docs/accounts.md)
 
 **Fase 7**
 

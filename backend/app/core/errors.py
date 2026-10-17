@@ -33,6 +33,11 @@ class AuthenticationError(VaultXError):
     code = "unauthenticated"
 
 
+class TooManyAttemptsError(VaultXError):
+    status_code = 429
+    code = "too_many_attempts"
+
+
 class InvalidOperationError(VaultXError):
     status_code = 422
     code = "invalid_operation"

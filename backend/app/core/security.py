@@ -11,6 +11,8 @@ import hashlib
 import hmac
 import secrets
 
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -96,3 +98,30 @@ def verify_master_password(client_hash: str, stored: str) -> bool:
 def dummy_master_password_hash() -> str:
     """Vaste dummy-hash: een onbekend e-mailadres kost evenveel tijd als een bekend."""
     return hash_master_password("vaultx-dummy")
+
+
+# Wachtwoorden van gewone VaultX-accounts (inloggen zonder Authentik). Argon2id met de
+# aanbevolen parameters van argon2-cffi; het formaat ($argon2id$...) bevat salt en parameters.
+# Dit wachtwoord staat los van het master password van de kluis, dat de server nooit ziet.
+_password_hasher = PasswordHasher()
+
+
+def hash_password(password: str) -> str:
+    return _password_hasher.hash(password)
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        return _password_hasher.verify(stored, password)
+    except (VerificationError, InvalidHashError):
+        return False
+
+
+def password_needs_rehash(stored: str) -> bool:
+    return _password_hasher.check_needs_rehash(stored)
+
+
+@functools.cache
+def dummy_password_hash() -> str:
+    """Vaste dummy-hash: een onbekende gebruikersnaam kost evenveel tijd als een bekende."""
+    return hash_password("vaultx-dummy-password")
