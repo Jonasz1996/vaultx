@@ -1,6 +1,6 @@
 # VaultX backend (FastAPI). Build vanuit de repo-root:
 #   docker build -f docker/backend.Dockerfile -t vaultx-backend .
-FROM python:3.13-slim AS base
+FROM python:3.14-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
