@@ -1,5 +1,6 @@
 """VaultX: FastAPI-applicatie."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -16,10 +17,15 @@ from app.core.logging import configure_logging
 from app.services.npm_scheduler import start_scheduler, stop_scheduler
 from app.services.oidc import OIDCProvider
 
+log = logging.getLogger("app")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    if settings.environment == "production":
+        for problem in settings.insecure_settings():
+            log.warning("Onveilige instelling: %s", problem)
     if not hasattr(app.state, "oidc"):
         app.state.oidc = OIDCProvider(settings)
     scheduler = start_scheduler(settings)

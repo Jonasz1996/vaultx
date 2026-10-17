@@ -17,6 +17,7 @@ klare tekst van de notities staat.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -315,8 +316,9 @@ def main() -> None:
             imgs = page.locator(".preview img.note-img")
             expect(imgs).to_have_count(2, timeout=15_000)
             for i in range(2):
-                assert imgs.nth(i).get_attribute("src").startswith("data:image/png;base64,")
-            assert imgs.first.get_attribute("width") == "80"
+                expect(imgs.nth(i)).to_have_attribute("src", re.compile(r"^data:image/png;base64,"))
+            # Het voorbeeld rendert tijdens het typen mee: wachten tot "|80" volledig verwerkt is.
+            expect(imgs.first).to_have_attribute("width", "80")
             expect(imgs.nth(1)).to_have_js_property("naturalWidth", 320)
             with page.expect_download() as dl:
                 page.locator(".preview .file-link", has_text="wachtwoorden-router.txt").click()
@@ -475,6 +477,19 @@ def main() -> None:
                 pairs
             )
             assert ("vault.note.file.upload", "success") in pairs, pairs
+
+            step("Server wisselt de inhoud van twee notities om: de browser merkt het")
+            with psycopg.connect(dsn) as conn:
+                (a, ca), (b, cb) = conn.execute(
+                    "SELECT id, content FROM vault_notes WHERE deleted_at IS NULL ORDER BY id LIMIT 2"
+                ).fetchall()
+                conn.execute("UPDATE vault_notes SET content = %s WHERE id = %s", (cb, a))
+                conn.execute("UPDATE vault_notes SET content = %s WHERE id = %s", (ca, b))
+            page.reload()
+            page.locator("input[type=password]").fill(PASSWORD)
+            page.get_by_role("button", name="Ontgrendelen").click()
+            swapped = page.locator(".warn-box", has_text="2 notities konden niet ontsleuteld worden")
+            expect(swapped).to_be_visible(timeout=30_000)
             assert not errors, errors
             browser.close()
         step("OK: notities werken end-to-end en de server ziet enkel versleutelde tekst")

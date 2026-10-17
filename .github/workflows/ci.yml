@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# Een nieuwe push op dezelfde PR stopt de vorige run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -315,3 +323,30 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build -f docker/backend.Dockerfile -t vaultx-backend:ci .
       - run: docker build -f docker/frontend.Dockerfile -t vaultx-web:ci .
+      - name: nginx-configs controleren (Docker-image en Debian-site)
+        run: |
+          docker run --rm --add-host backend:127.0.0.1 vaultx-web:ci nginx -t
+          docker run --rm -v "$PWD/deploy/debian/nginx-vaultx.conf:/etc/nginx/conf.d/default.conf:ro" \
+            docker.io/library/nginx:1.29-alpine nginx -t
+
+  deploy-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck deploy/debian/*.sh
+
+  dependencies:
+    # Bekende kwetsbaarheden in de afhankelijkheden (Python en de frontend die naar de browser gaat)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pip-audit
+      - run: pip-audit -r backend/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high

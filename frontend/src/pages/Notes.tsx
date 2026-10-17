@@ -581,7 +581,11 @@ function Workspace({ userKey }: { userKey: UserKey }) {
     const a = t.closest("a");
     if (a?.classList.contains("wikilink")) {
       e.preventDefault();
-      if (a.dataset.app) return navigate(a.getAttribute("href")!);
+      if (a.dataset.app) {
+        // Ruwe HTML in een (geïmporteerde) notitie kan zelf class/data-attributen zetten: enkel eigen paden volgen.
+        const href = a.getAttribute("href") ?? "";
+        return /^\/(?!\/)/.test(href) ? navigate(href) : undefined;
+      }
       if (a.dataset.note) return openNote(a.dataset.note, a.dataset.heading);
       if (a.dataset.heading) return scrollToHeading(a.dataset.heading);
       if (a.dataset.new) void run(() => createNote(a.dataset.new!, "", ""));

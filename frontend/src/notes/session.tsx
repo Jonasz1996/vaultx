@@ -43,11 +43,16 @@ export function VaultKeyProvider({ children }: { children: ReactNode }) {
     const touch = () => (lastActivity.current = Date.now());
     const events = ["keydown", "pointerdown", "wheel"] as const;
     events.forEach((e) => window.addEventListener(e, touch, { passive: true }));
-    const timer = window.setInterval(() => {
+    const check = () => {
       if (Date.now() - lastActivity.current > AUTO_LOCK_MINUTES * 60_000) setKey(null);
-    }, 15_000);
+    };
+    // Browsers vertragen timers in achtergrondtabs: bij terugkeren naar de tab meteen controleren.
+    const onVisible = () => document.visibilityState === "visible" && check();
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = window.setInterval(check, 15_000);
     return () => {
       events.forEach((e) => window.removeEventListener(e, touch));
+      document.removeEventListener("visibilitychange", onVisible);
       window.clearInterval(timer);
     };
   }, [key]);

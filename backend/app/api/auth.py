@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CSRF_HEADER, DbSession, MetaDep, OIDCDep, SettingsDep
 from app.core.config import Settings
@@ -99,9 +100,15 @@ async def callback(
         saved = _serializer(settings).loads(raw, max_age=STATE_MAX_AGE) if raw else None
     except BadSignature:
         saved = None
+    if not saved:
+        # Geen (geldige) state-cookie: deze browser startte geen login. Niet in de auditlog, anders
+        # kan iedereen zonder login die (gehashte, append-only) log volschrijven.
+        log.info("OIDC-callback zonder geldige state-cookie (error=%r)", (error or "")[:40])
+        return _error_redirect(settings, "idp_error" if error else "invalid_state")
     if error:
-        return await fail("idp_error", error[:100])
-    if not saved or not state or not code or not hmac.compare_digest(saved["s"], state):
+        # Enkel een OAuth-foutcode (bv. access_denied) bewaren, geen vrije tekst van de aanroeper.
+        return await fail("idp_error", error if re.fullmatch(r"[a-z_]{1,40}", error) else "other")
+    if not state or not code or not hmac.compare_digest(saved["s"], state):
         return await fail("invalid_state")
 
     try:
@@ -116,15 +123,22 @@ async def callback(
         log.warning("Login mislukt: %s", exc.message)
         return await fail("token_invalid", exc.message)
 
-    try:
-        result = await IdentityService(db, settings).login_from_claims(claims, meta)
-    except PermissionDeniedError:
-        return _error_redirect(settings, "account_disabled")
-
-    token, _ = await SessionService(db, settings).create(
-        result.user, meta=meta, oidc_sid=claims.get("sid"), id_token=tokens["id_token"]
-    )
-    await db.commit()
+    # Twee gelijktijdige eerste logins van dezelfde gebruiker (of nieuwe organisaties uit de
+    # groepen) botsen op een unieke sleutel: dan één keer opnieuw, nu bestaat de rij al.
+    for attempt in range(2):
+        try:
+            result = await IdentityService(db, settings).login_from_claims(claims, meta)
+            token, _ = await SessionService(db, settings).create(
+                result.user, meta=meta, oidc_sid=claims.get("sid"), id_token=tokens["id_token"]
+            )
+            await db.commit()
+            break
+        except PermissionDeniedError:
+            return _error_redirect(settings, "account_disabled")
+        except IntegrityError:
+            await db.rollback()
+            if attempt:
+                raise
 
     resp = RedirectResponse(f"{settings.public_url}{saved['next']}", status_code=303)
     resp.delete_cookie(STATE_COOKIE, path="/auth")

@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.orm import selectinload
 
 from app.models import Application, AppLogin, AuthentikProtection, DiscoveredHost, NpmChange, NpmConnection
@@ -44,6 +44,19 @@ class NpmConnectionRepository(Repository[NpmConnection]):
             .group_by(DiscoveredHost.connection_id)
         )
         return {cid: n for cid, n in rows.all()}
+
+    async def claim_due_sync(self, connection_id: UUID, cutoff: datetime, now: datetime) -> bool:
+        """Zet last_sync_at enkel als de koppeling nog aan de beurt is; zo synct maar één node ze."""
+        claimed = await self.db.scalar(
+            update(NpmConnection)
+            .where(
+                NpmConnection.id == connection_id,
+                or_(NpmConnection.last_sync_at.is_(None), NpmConnection.last_sync_at < cutoff),
+            )
+            .values(last_sync_at=now)
+            .returning(NpmConnection.id)
+        )
+        return claimed is not None
 
     async def lock_for_sync(self, connection_id: UUID) -> None:
         """Serialiseert syncs van dezelfde koppeling (ook over meerdere nodes), tot de commit."""

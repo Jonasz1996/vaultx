@@ -12,6 +12,11 @@ map $http_x_forwarded_proto $vaultx_proto {
     ""      $scheme;
 }
 
+# Login-endpoints (Authentik-callback, Bitwarden /identity) per client-IP afremmen: elke
+# Bitwarden-login kost de server een PBKDF2-berekening en een auditregel.
+limit_req_zone $binary_remote_addr zone=vaultx_login:10m rate=30r/m;
+limit_req_status 429;
+
 server {
     listen 8080;
     server_name _;
@@ -40,7 +45,19 @@ server {
         proxy_read_timeout 120s;
     }
 
-    location ~ ^/(api|auth|health|identity)(/|$) {
+    location ~ ^/(auth|identity)(/|$) {
+        limit_req zone=vaultx_login burst=20 nodelay;
+        proxy_pass http://vaultx_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $vaultx_proto;
+        proxy_set_header X-Request-ID $request_id;
+    }
+
+    location ~ ^/(api|health)(/|$) {
         proxy_pass http://vaultx_backend;
         proxy_http_version 1.1;
         proxy_set_header Connection "";

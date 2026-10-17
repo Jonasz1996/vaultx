@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, InvalidOperationError, NotFoundError
@@ -22,7 +23,7 @@ from app.repositories import (
     VaultNoteRepository,
     VaultNoteVersionRepository,
 )
-from app.schemas.notes import NoteContent
+from app.schemas.notes import NoteContent, NoteCreate
 from app.schemas.vault import ENC_STRING_TYPE2
 from app.services.audit import AuditService
 from app.services.principal import Principal
@@ -81,26 +82,36 @@ class NotesService:
         await self.audit.record(action, p.actor, target_type="vault_note", target_id=note_id, details=details)
 
     @staticmethod
-    def _new(account: VaultAccount, content: str) -> VaultNote:
+    def _new(account: VaultAccount, content: str, note_id: UUID | None = None) -> VaultNote:
         now = datetime.now(UTC)
-        return VaultNote(user_id=account.user_id, content=content, revision=1, created_at=now, updated_at=now)
+        note = VaultNote(user_id=account.user_id, content=content, revision=1, created_at=now, updated_at=now)
+        if note_id is not None:
+            note.id = note_id
+        return note
+
+    async def _flush_new(self) -> None:
+        try:
+            await self.db.flush()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise ConflictError("Er bestaat al een notitie met dat id") from exc
 
     async def list(self, p: Principal) -> list[VaultNote]:
         account = await self._account(p)
         return await self.notes.for_user(account.user_id)
 
-    async def create(self, p: Principal, data: NoteContent) -> VaultNote:
+    async def create(self, p: Principal, data: NoteCreate) -> VaultNote:
         account = await self._account(p)
-        note = self.notes.add(self._new(account, data.content))
-        await self.db.flush()
+        note = self.notes.add(self._new(account, data.content, data.id))
+        await self._flush_new()
         await self._record(p, "vault.note.create", note.id)
         await self.db.commit()
         return note
 
-    async def import_many(self, p: Principal, items: list[NoteContent]) -> list[VaultNote]:
+    async def import_many(self, p: Principal, items: list[NoteCreate]) -> list[VaultNote]:
         account = await self._account(p)
-        notes = [self.notes.add(self._new(account, i.content)) for i in items]
-        await self.db.flush()
+        notes = [self.notes.add(self._new(account, i.content, i.id)) for i in items]
+        await self._flush_new()
         await self._record(p, "vault.note.import", None, count=len(notes))
         await self.db.commit()
         return notes

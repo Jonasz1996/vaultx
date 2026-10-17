@@ -1,0 +1,11 @@
+# /etc/systemd/system/vaultx-backup.timer — elke nacht een back-up, zie docs/backup.md
+[Unit]
+Description=Nachtelijke VaultX back-up
+
+[Timer]
+OnCalendar=*-*-* 03:15
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
