@@ -30,7 +30,7 @@ from app.repositories import (
     VaultFolderRepository,
     VaultNoteRepository,
 )
-from app.schemas.vault import VaultEnroll
+from app.schemas.vault import VaultEnroll, VaultPasswordChange
 from app.services.audit import AuditService
 from app.services.principal import Principal
 from app.services.vault_auth import VaultCaller, device_type_name, normalize_email
@@ -136,20 +136,18 @@ class VaultService:
         await self.db.commit()
         return account
 
-    async def unlock(self, p: Principal, master_password_hash: str, settings: Settings) -> VaultAccount:
-        """Ontgrendelen in de webinterface (notities, fase 7).
-
-        De browser bewijst het master password met dezelfde afgeleide hash als een
-        Bitwarden-client en krijgt dan de versleutelde user key. Zelfde grens op
-        mislukte pogingen als bij inloggen vanuit een app: het telt samen.
-        """
+    async def _verify_master(
+        self, p: Principal, master_password_hash: str, settings: Settings, action: str
+    ) -> VaultAccount:
+        """Controleert het master password in de webinterface, met dezelfde grens op mislukte
+        pogingen als bij inloggen vanuit een app: het telt samen. Commit bij een fout."""
         account = await self.accounts.lock(p.user.id)
         if account is None:
             raise NotFoundError("Je hebt nog geen kluis")
         now = datetime.now(UTC)
         if account.locked_until is not None and account.locked_until > now:
             await self.audit.record(
-                "vault.unlock",
+                action,
                 p.actor,
                 outcome="denied",
                 target_type="vault",
@@ -169,7 +167,7 @@ class VaultService:
                 account.failed_logins = 0
                 details["locked_until"] = account.locked_until.isoformat()
             await self.audit.record(
-                "vault.unlock",
+                action,
                 p.actor,
                 outcome="failure",
                 target_type="vault",
@@ -180,7 +178,51 @@ class VaultService:
             raise InvalidOperationError("Master password is onjuist")
         account.failed_logins = 0
         account.locked_until = None
+        return account
+
+    async def unlock(self, p: Principal, master_password_hash: str, settings: Settings) -> VaultAccount:
+        """Ontgrendelen in de webinterface (notities, fase 7).
+
+        De browser bewijst het master password met dezelfde afgeleide hash als een
+        Bitwarden-client en krijgt dan de versleutelde user key.
+        """
+        account = await self._verify_master(p, master_password_hash, settings, "vault.unlock")
         await self.audit.record("vault.unlock", p.actor, target_type="vault", target_id=p.user.id)
+        await self.db.commit()
+        return account
+
+    async def change_password(
+        self, p: Principal, data: VaultPasswordChange, settings: Settings
+    ) -> VaultAccount:
+        """Nieuw master password en/of nieuwe KDF. Zoals bij Bitwarden worden daarna alle
+        apparaten afgemeld: hun tokens en hun afgeleide sleutels kloppen niet meer."""
+        account = await self._verify_master(
+            p, data.current_master_password_hash, settings, "vault.password.change"
+        )
+        now = datetime.now(UTC)
+        account.kdf_type = data.kdf
+        account.kdf_iterations = data.kdf_iterations
+        account.kdf_memory = data.kdf_memory
+        account.kdf_parallelism = data.kdf_parallelism
+        account.master_password_hash = await run_in_threadpool(
+            hash_master_password, data.master_password_hash
+        )
+        account.user_key = data.user_key
+        account.security_stamp = new_security_stamp()
+        account.revision_date = max(now, account.revision_date + timedelta(microseconds=1))
+        account.updated_at = now
+        revoked = 0
+        for device in await self.devices.for_user(account.user_id):
+            if device.revoked_at is None:
+                device.revoked_at = now
+                revoked += 1
+        await self.audit.record(
+            "vault.password.change",
+            p.actor,
+            target_type="vault",
+            target_id=p.user.id,
+            details={"kdf": data.kdf, "kdf_iterations": data.kdf_iterations, "devices_signed_out": revoked},
+        )
         await self.db.commit()
         return account
 

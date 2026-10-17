@@ -112,26 +112,105 @@ export interface UnlockParams {
   salt: string;
   kdf: number;
   iterations: number;
+  /** Argon2id: geheugen in MiB en parallelisme. */
+  memory?: number | null;
+  parallelism?: number | null;
+}
+
+/** Bitwarden-standaard voor Argon2id. */
+export const ARGON2_DEFAULTS = { iterations: 3, memory: 64, parallelism: 4 };
+
+/**
+ * Master key afleiden zoals de Bitwarden-clients.
+ *   PBKDF2:   PBKDF2-SHA256(wachtwoord, salt, iteraties)
+ *   Argon2id: Argon2id(wachtwoord, SHA-256(salt), iteraties, geheugen in KiB, parallelisme), 32 bytes
+ * De ondergrenzen worden hier gecontroleerd: een (gecompromitteerde) server die 1 iteratie
+ * terugstuurt, zou anders een login-hash krijgen die offline in een oogwenk te kraken is.
+ */
+async function deriveMasterKey(params: UnlockParams, password: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  const salt = enc.encode(params.salt);
+  if (params.kdf === 0) {
+    if (!Number.isInteger(params.iterations) || params.iterations < PBKDF2_ITERATIONS)
+      throw new Error("De server vraagt te weinig PBKDF2-iteraties; ontgrendelen geweigerd.");
+    return pbkdf2(password, salt, params.iterations);
+  }
+  if (params.kdf === 1) {
+    const { iterations } = params;
+    const memory = params.memory ?? 0;
+    const parallelism = params.parallelism ?? 0;
+    if (!Number.isInteger(iterations) || iterations < 2 || memory < 16 || parallelism < 1)
+      throw new Error("De server vraagt te zwakke Argon2id-instellingen; ontgrendelen geweigerd.");
+    const { argon2id } = await import("hash-wasm");
+    const out = await argon2id({
+      password,
+      salt: new Uint8Array(await subtle().digest("SHA-256", salt)),
+      iterations,
+      memorySize: memory * 1024,
+      parallelism,
+      hashLength: 32,
+      outputType: "binary",
+    });
+    return new Uint8Array(out);
+  }
+  throw new Error("Onbekende sleutelafleiding");
 }
 
 /** Stap 1 van ontgrendelen: master key en login-hash afleiden (de hash gaat naar de server). */
 export async function deriveLogin(params: UnlockParams, masterPassword: string) {
-  if (params.kdf !== 0)
-    throw new Error("Deze kluis gebruikt Argon2id; ontgrendelen in de browser kan voorlopig enkel met PBKDF2.");
-  // De server kiest de parameters niet mee: een (gecompromitteerde) server die 1 iteratie terugstuurt,
-  // zou anders een login-hash krijgen die offline in een oogwenk te kraken is.
-  if (!Number.isInteger(params.iterations) || params.iterations < PBKDF2_ITERATIONS)
-    throw new Error("De server vraagt te weinig PBKDF2-iteraties; ontgrendelen geweigerd.");
   const password = enc.encode(masterPassword);
-  const masterKey = await pbkdf2(password, enc.encode(params.salt), params.iterations);
+  const masterKey = await deriveMasterKey(params, password);
   const loginHash = toB64(await pbkdf2(masterKey, password, 1));
   return { masterKey, loginHash };
 }
 
+async function stretchKey(masterKey: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  return concat(await hkdfExpand32(masterKey, "enc"), await hkdfExpand32(masterKey, "mac"));
+}
+
+export interface PasswordChangePayload {
+  current_master_password_hash: string;
+  kdf: number;
+  kdf_iterations: number;
+  kdf_memory: number | null;
+  kdf_parallelism: number | null;
+  master_password_hash: string;
+  user_key: string;
+}
+
+/**
+ * Master password en/of sleutelafleiding wijzigen. De user key zelf blijft dezelfde (dus
+ * alle items, mappen en notities blijven leesbaar); hij wordt enkel opnieuw ingepakt met de
+ * nieuwe master key. `current` komt van deriveLogin met het huidige wachtwoord, `encUserKey`
+ * van de server na controle van die login-hash.
+ */
+export async function changeMasterPassword(
+  current: { masterKey: Uint8Array<ArrayBuffer>; loginHash: string },
+  encUserKey: string,
+  salt: string,
+  newPassword: string,
+  next: Omit<UnlockParams, "salt">,
+): Promise<PasswordChangePayload> {
+  const rawUserKey = await decryptType2(encUserKey, await stretchKey(current.masterKey));
+  try {
+    if (rawUserKey.length !== 64) throw new Error("Onverwachte user key");
+    const fresh = await deriveLogin({ ...next, salt }, newPassword);
+    return {
+      current_master_password_hash: current.loginHash,
+      kdf: next.kdf,
+      kdf_iterations: next.iterations,
+      kdf_memory: next.kdf === 1 ? (next.memory ?? null) : null,
+      kdf_parallelism: next.kdf === 1 ? (next.parallelism ?? null) : null,
+      master_password_hash: fresh.loginHash,
+      user_key: await encryptType2(rawUserKey, await stretchKey(fresh.masterKey)),
+    };
+  } finally {
+    rawUserKey.fill(0);
+  }
+}
+
 /** Stap 2: de user key uitpakken die de server na controle van de login-hash teruggeeft. */
 export async function openUserKey(masterKey: Uint8Array<ArrayBuffer>, encUserKey: string): Promise<UserKey> {
-  const stretched = concat(await hkdfExpand32(masterKey, "enc"), await hkdfExpand32(masterKey, "mac"));
-  const raw = await decryptType2(encUserKey, stretched);
+  const raw = await decryptType2(encUserKey, await stretchKey(masterKey));
   if (raw.length !== 64) throw new Error("Onverwachte user key");
   try {
     return {

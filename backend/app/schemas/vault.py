@@ -22,6 +22,38 @@ PBKDF2_MIN_ITERATIONS = 600_000
 PBKDF2_MAX_ITERATIONS = 2_000_000
 
 
+def check_kdf(
+    kdf: int, iterations: int, memory: int | None, parallelism: int | None
+) -> tuple[int | None, int | None]:
+    """Zelfde ondergrenzen als de Bitwarden-clients bij het instellen van een KDF.
+
+    Geeft (geheugen, parallelisme) terug: bij PBKDF2 altijd None.
+    """
+    if kdf == 0:
+        if not PBKDF2_MIN_ITERATIONS <= iterations <= PBKDF2_MAX_ITERATIONS:
+            raise ValueError(
+                f"PBKDF2 vraagt {PBKDF2_MIN_ITERATIONS:,} tot {PBKDF2_MAX_ITERATIONS:,} iteraties"
+            )
+        return None, None
+    if not 2 <= iterations <= 10:
+        raise ValueError("Argon2id vraagt 2 tot 10 iteraties")
+    if memory is None or not 16 <= memory <= 1024:
+        raise ValueError("Argon2id vraagt 16 tot 1024 MiB geheugen")
+    if parallelism is None or not 1 <= parallelism <= 16:
+        raise ValueError("Argon2id vraagt een parallelisme van 1 tot 16")
+    return memory, parallelism
+
+
+def _check_hash(v: str) -> str:
+    try:
+        raw = base64.b64decode(v, validate=True)
+    except ValueError as exc:
+        raise ValueError("master_password_hash is geen geldige base64") from exc
+    if len(raw) != 32:
+        raise ValueError("master_password_hash moet 32 bytes zijn")
+    return v
+
+
 class VaultEnroll(BaseModel):
     """Wat de browser na client-side sleutelafleiding naar VaultX stuurt.
 
@@ -43,13 +75,7 @@ class VaultEnroll(BaseModel):
     @field_validator("master_password_hash")
     @classmethod
     def _hash_is_32_bytes(cls, v: str) -> str:
-        try:
-            raw = base64.b64decode(v, validate=True)
-        except ValueError as exc:
-            raise ValueError("master_password_hash is geen geldige base64") from exc
-        if len(raw) != 32:
-            raise ValueError("master_password_hash moet 32 bytes zijn")
-        return v
+        return _check_hash(v)
 
     @field_validator("user_key", "private_key")
     @classmethod
@@ -71,21 +97,9 @@ class VaultEnroll(BaseModel):
 
     @model_validator(mode="after")
     def _kdf_minimums(self) -> "VaultEnroll":
-        # Zelfde ondergrenzen als de Bitwarden-clients bij het instellen van een KDF.
-        if self.kdf == 0:
-            if not PBKDF2_MIN_ITERATIONS <= self.kdf_iterations <= PBKDF2_MAX_ITERATIONS:
-                raise ValueError(
-                    f"PBKDF2 vraagt {PBKDF2_MIN_ITERATIONS:,} tot {PBKDF2_MAX_ITERATIONS:,} iteraties"
-                )
-            self.kdf_memory = None
-            self.kdf_parallelism = None
-        else:
-            if not 2 <= self.kdf_iterations <= 10:
-                raise ValueError("Argon2id vraagt 2 tot 10 iteraties")
-            if self.kdf_memory is None or not 16 <= self.kdf_memory <= 1024:
-                raise ValueError("Argon2id vraagt 16 tot 1024 MiB geheugen")
-            if self.kdf_parallelism is None or not 1 <= self.kdf_parallelism <= 16:
-                raise ValueError("Argon2id vraagt een parallelisme van 1 tot 16")
+        self.kdf_memory, self.kdf_parallelism = check_kdf(
+            self.kdf, self.kdf_iterations, self.kdf_memory, self.kdf_parallelism
+        )
         return self
 
 
@@ -140,3 +154,40 @@ class VaultUnlock(BaseModel):
 class VaultUnlockOut(BaseModel):
     # User key, versleuteld met de master key: de browser pakt hem zelf uit.
     user_key: str
+
+
+class VaultPasswordChange(BaseModel):
+    """Master password en/of sleutelafleiding wijzigen (fase 9).
+
+    De browser pakt de user key uit met het huidige master password en pakt hem opnieuw
+    in met de nieuwe master key. De user key zelf (en dus alle inhoud) blijft dezelfde.
+    """
+
+    current_master_password_hash: str = Field(max_length=128)
+    kdf: Literal[0, 1]
+    kdf_iterations: int
+    kdf_memory: int | None = None
+    kdf_parallelism: int | None = None
+    master_password_hash: str = Field(max_length=128)
+    user_key: str = Field(
+        max_length=1024, description="Dezelfde user key, versleuteld met de nieuwe master key"
+    )
+
+    @field_validator("current_master_password_hash", "master_password_hash")
+    @classmethod
+    def _hash_is_32_bytes(cls, v: str) -> str:
+        return _check_hash(v)
+
+    @field_validator("user_key")
+    @classmethod
+    def _enc_string(cls, v: str) -> str:
+        if not ENC_STRING_TYPE2.match(v):
+            raise ValueError("verwacht een EncString van type 2 (AES-256-CBC-HMAC)")
+        return v
+
+    @model_validator(mode="after")
+    def _kdf_minimums(self) -> "VaultPasswordChange":
+        self.kdf_memory, self.kdf_parallelism = check_kdf(
+            self.kdf, self.kdf_iterations, self.kdf_memory, self.kdf_parallelism
+        )
+        return self

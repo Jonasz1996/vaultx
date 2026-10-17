@@ -4,7 +4,14 @@ from fastapi import APIRouter, Response, status
 
 from app.api.deps import CurrentPrincipal, DbSession, SettingsDep
 from app.core.errors import NotFoundError
-from app.schemas.vault import VaultDeviceOut, VaultEnroll, VaultStatusOut, VaultUnlock, VaultUnlockOut
+from app.schemas.vault import (
+    VaultDeviceOut,
+    VaultEnroll,
+    VaultPasswordChange,
+    VaultStatusOut,
+    VaultUnlock,
+    VaultUnlockOut,
+)
 from app.services.vault import VaultService
 from app.services.vault_auth import device_type_name
 
@@ -72,6 +79,20 @@ async def unlock(
         raise NotFoundError("De kluis is uitgeschakeld op deze server")
     account = await VaultService(db).unlock(p, body.master_password_hash, settings)
     return VaultUnlockOut(user_key=account.user_key)
+
+
+@router.post(
+    "/password",
+    response_model=VaultStatusOut,
+    summary="Master password of sleutelafleiding wijzigen (alle apparaten worden afgemeld)",
+)
+async def change_password(
+    body: VaultPasswordChange, p: CurrentPrincipal, db: DbSession, settings: SettingsDep
+) -> VaultStatusOut:
+    if not settings.vault_enabled:
+        raise NotFoundError("De kluis is uitgeschakeld op deze server")
+    await VaultService(db).change_password(p, body, settings)
+    return await _status(p, db, settings)
 
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT, summary="Kluis met alle items verwijderen")

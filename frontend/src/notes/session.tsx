@@ -26,7 +26,13 @@ export function VaultKeyProvider({ children }: { children: ReactNode }) {
   const unlock = useCallback(async (status: VaultStatus, masterPassword: string) => {
     if (!status.kdf_salt || status.kdf === null || !status.kdf_iterations) throw new Error("Je kluis is nog niet actief");
     const { masterKey, loginHash } = await deriveLogin(
-      { salt: status.kdf_salt, kdf: status.kdf, iterations: status.kdf_iterations },
+      {
+        salt: status.kdf_salt,
+        kdf: status.kdf,
+        iterations: status.kdf_iterations,
+        memory: status.kdf_memory,
+        parallelism: status.kdf_parallelism,
+      },
       masterPassword,
     );
     try {

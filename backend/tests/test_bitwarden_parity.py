@@ -66,3 +66,53 @@ async def test_import_rejects_bad_input(make_client):
     folders = (await c.get("/api/sync", headers=h)).json()["folders"]
     assert len(folders) == 1 and folders[0]["id"] != eve_folder["id"]
     assert (await other.get("/api/sync", headers=oh)).json()["ciphers"] == []
+
+
+async def test_change_master_password_to_argon2id(make_client):
+    from tests.bw_crypto import argon2_master_key, master_password_hash, wrap_user_key
+    from tests.test_vault import PASSWORD, token
+
+    c = await make_client()
+    account = await enroll(c, "jonas")
+    h = await bearer(c, account)
+    item = (
+        await c.post("/api/ciphers", json=login_item(account, "Grafana", "admin", "pw"), headers=h)
+    ).json()
+
+    new_pw = "een nieuw en lang master password"
+    mkey = argon2_master_key(new_pw, account.email, 3, 64, 4)
+    body = {
+        "current_master_password_hash": account.password_hash,
+        "kdf": 1,
+        "kdf_iterations": 3,
+        "kdf_memory": 64,
+        "kdf_parallelism": 4,
+        "master_password_hash": master_password_hash(mkey, new_pw),
+        "user_key": wrap_user_key(mkey, account.user_key),
+    }
+    wrong = {**body, "current_master_password_hash": master_password_hash(account.mkey, "fout")}
+    r = await c.post_json("/api/v1/me/vault/password", wrong)
+    assert r.status_code == 422 and "onjuist" in r.text
+    weak = {**body, "kdf_memory": 8}
+    assert (await c.post_json("/api/v1/me/vault/password", weak)).status_code == 422
+    r = await c.post_json("/api/v1/me/vault/password", body)
+    assert r.status_code == 200, r.text
+    st = r.json()
+    assert (st["kdf"], st["kdf_iterations"], st["kdf_memory"], st["kdf_parallelism"]) == (1, 3, 64, 4)
+    assert all(d["revoked_at"] for d in st["devices"])
+
+    # Oude tokens en het oude wachtwoord werken niet meer
+    assert (await c.get("/api/sync", headers=h)).status_code == 401
+    assert (await token(c, account.email, account.password_hash)).status_code == 400
+    pre = (await c.post("/identity/accounts/prelogin/password", json={"email": account.email})).json()
+    assert pre["kdfSettings"] == {"kdfType": 1, "iterations": 3, "memory": 64, "parallelism": 4}
+    r = await token(c, account.email, master_password_hash(mkey, new_pw), "dev-2")
+    assert r.status_code == 200, r.text
+    # Zelfde user key, dus bestaande items blijven leesbaar
+    from tests.bw_crypto import unwrap_user_key
+
+    assert unwrap_user_key(mkey, r.json()["Key"]) == account.user_key
+    h2 = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    got = (await c.get(f"/api/ciphers/{item['id']}", headers=h2)).json()
+    assert account.dec(got["login"]["password"]) == "pw"
+    assert new_pw != PASSWORD

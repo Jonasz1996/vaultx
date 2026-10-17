@@ -83,6 +83,21 @@ def self_signed_cert(directory: str) -> tuple[str, str]:
     return cert_path, key_path
 
 
+PASSWORD_NOW = [PASSWORD]
+
+
+def node_json(script: str, mode: str, data: object) -> dict:
+    """Draait een stuk browsercode (frontend/src/vault/crypto.ts) via e2e/<script> in Node."""
+    out = subprocess.run(
+        ["node", "--experimental-strip-types", str(ROOT / "e2e" / script), mode],
+        input=json.dumps(data),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return json.loads(out)
+
+
 def step(msg: str) -> None:
     print(f"==> {msg}", flush=True)
 
@@ -287,6 +302,66 @@ def main() -> None:
         folders = bw.json("list", "folders")
         assert [f["id"] for f in folders if f["id"]] == [], folders  # alleen het virtuele "No Folder"
 
+        step("Fase 9: importeren met bw import (Bitwarden-JSON met een map)")
+        export = {
+            "encrypted": False,
+            "folders": [{"id": "6e0c7a7e-3f7e-4c55-9d7c-1f2a3b4c5d6e", "name": "Geimporteerd"}],
+            "items": [
+                {
+                    **template,
+                    "name": "Proxmox",
+                    "folderId": "6e0c7a7e-3f7e-4c55-9d7c-1f2a3b4c5d6e",
+                    "login": {**login_tpl, "username": "root", "password": "pve-pw-1", "uris": []},
+                },
+                {**template, "name": "Router", "login": {**login_tpl, "username": "admin", "password": "r2"}},
+            ],
+        }
+        export_file = Path(appdata) / "export.json"
+        export_file.write_text(json.dumps(export))
+        bw.run("import", "bitwardenjson", str(export_file))
+        bw.run("sync", "--force")
+        assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-1"
+        imported_folder = [f for f in bw.json("list", "folders") if f["name"] == "Geimporteerd"]
+        assert len(imported_folder) == 1, imported_folder
+        proxmox = bw.json("list", "items", "--search", "Proxmox")[0]
+        assert proxmox["folderId"] == imported_folder[0]["id"], proxmox
+
+        step("Fase 9: master password wijzigen in VaultX (naar Argon2id), daarna inloggen met bw")
+        new_password = "een-nog-langer-nieuw-master-password-9"
+        st = user.get("/api/v1/me/vault").json()
+        params = {
+            "salt": st["kdf_salt"],
+            "kdf": st["kdf"],
+            "iterations": st["kdf_iterations"],
+            "memory": st["kdf_memory"],
+            "parallelism": st["kdf_parallelism"],
+        }
+        old = node_json("vault_password.mts", "derive", {"params": params, "password": PASSWORD})
+        csrf = {"X-VaultX-CSRF": "1"}
+        r = user.post("/api/v1/me/vault/unlock", json={"master_password_hash": old["loginHash"]}, headers=csrf)
+        assert r.status_code == 200, r.text
+        change = node_json(
+            "vault_password.mts",
+            "change",
+            {
+                **old,
+                "encUserKey": r.json()["user_key"],
+                "salt": st["kdf_salt"],
+                "newPassword": new_password,
+                "next": {"kdf": 1, "iterations": 3, "memory": 64, "parallelism": 4},
+            },
+        )
+        r = user.post("/api/v1/me/vault/password", json=change, headers=csrf)
+        assert r.status_code == 200, r.text
+        assert bw.run("sync", "--force", check=False).returncode != 0, "oude sessie werkt nog na wijziging"
+        bw.run("logout", check=False)
+        bw.session = None
+        old_login = bw.run("login", email, PASSWORD, "--raw", check=False)
+        assert old_login.returncode != 0, "oud wachtwoord werkt nog"
+        bw.session = bw.run("login", email, new_password, "--raw").stdout.strip()
+        assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-1"
+        PASSWORD_NOW[0] = new_password
+
         step("Gebruiker deactiveren in VaultX: de kluis gaat dicht op alle apparaten")
         admin = httpx.Client(base_url=base, verify=cert)
         login(admin, fake, "admin-e2e", "admin-e2e@example.com", ["vaultx-admins"])
@@ -298,7 +373,7 @@ def main() -> None:
         assert bw.run("sync", "--force", check=False).returncode != 0, "sync lukte na deactiveren"
         bw.run("logout", check=False)
         bw.session = None
-        again = bw.run("login", email, PASSWORD, "--raw", check=False)
+        again = bw.run("login", email, PASSWORD_NOW[0], "--raw", check=False)
         assert again.returncode != 0, "login lukte na deactiveren"
         print((again.stdout + again.stderr).strip().splitlines()[-1])
 

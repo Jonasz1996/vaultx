@@ -255,6 +255,9 @@ jobs:
       - run: pip install -r backend/requirements-dev.txt
       # Vaste versie: een nieuwe clientversie wordt bewust getest voor ze hier komt.
       - run: npm install -g @bitwarden/cli@2026.9.1
+      # De e2e draait de browsercode (Argon2id via hash-wasm) in Node.
+      - run: npm ci
+        working-directory: frontend
       - name: Login, sync en items met bw
         working-directory: backend
         env:
