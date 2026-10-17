@@ -1,9 +1,10 @@
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import selectinload
 
-from app.models import Application, DiscoveredHost, NpmConnection
+from app.models import Application, DiscoveredHost, NpmChange, NpmConnection
 from app.repositories.base import Repository
 
 
@@ -64,6 +65,13 @@ class DiscoveredHostRepository(Repository[DiscoveredHost]):
         )
         return list(rows)
 
+    async def by_npm_id(self, connection_id: UUID, npm_id: int) -> DiscoveredHost | None:
+        return await self.db.scalar(
+            select(DiscoveredHost)
+            .where(DiscoveredHost.connection_id == connection_id, DiscoveredHost.npm_id == npm_id)
+            .options(selectinload(DiscoveredHost.application))
+        )
+
     async def in_connection(self, connection_id: UUID, host_id: UUID) -> DiscoveredHost | None:
         return await self.db.scalar(
             select(DiscoveredHost)
@@ -99,3 +107,26 @@ class ApplicationRepository(Repository[Application]):
                 | func.lower(func.coalesce(Application.app_type, "")).contains(needle, autoescape=True)
             )
         return list(await self.db.scalars(stmt))
+
+
+class NpmChangeRepository(Repository[NpmChange]):
+    model = NpmChange
+
+    async def for_connection(
+        self, connection_id: UUID, *, npm_id: int | None = None, limit: int = 50
+    ) -> list[NpmChange]:
+        stmt = select(NpmChange).where(NpmChange.connection_id == connection_id)
+        if npm_id is not None:
+            stmt = stmt.where(NpmChange.npm_id == npm_id)
+        return list(await self.db.scalars(stmt.order_by(NpmChange.created_at.desc()).limit(limit)))
+
+    async def stale_running(self, connection_id: UUID, npm_id: int, before: datetime) -> list[NpmChange]:
+        rows = await self.db.scalars(
+            select(NpmChange).where(
+                NpmChange.connection_id == connection_id,
+                NpmChange.npm_id == npm_id,
+                NpmChange.status == "running",
+                NpmChange.created_at < before,
+            )
+        )
+        return list(rows)

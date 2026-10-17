@@ -129,6 +129,11 @@ class NpmService:
                 secret_ciphertext=self._seal(conn_id, data.secret),
                 verify_tls=data.verify_tls,
                 enabled=data.enabled,
+                write_enabled=data.write_enabled,
+                authentik_outpost_url=data.authentik_outpost_url,
+                probe_host=data.probe_host,
+                probe_http_port=data.probe_http_port,
+                probe_https_port=data.probe_https_port,
             )
         )
         await self.db.flush()
@@ -152,10 +157,14 @@ class NpmService:
         secret = values.pop("secret", None)
         if values.get("base_url"):
             values["base_url"] = normalize_base_url(values["base_url"])
+        # Deze velden mogen leeg: "" of null wist ze.
+        nullable = {"authentik_outpost_url", "probe_host"}
+        for k in nullable & values.keys():
+            values[k] = values[k] or None
         changes = {
             k: {"from": getattr(conn, k), "to": v}
             for k, v in values.items()
-            if v is not None and getattr(conn, k) != v
+            if (v is not None or k in nullable) and getattr(conn, k) != v
         }
         for field, change in changes.items():
             setattr(conn, field, change["to"])
@@ -333,53 +342,9 @@ class NpmService:
             if npm_id in seen:
                 continue
             seen.add(npm_id)
-            det = analyze(raw)
-            host = existing.get(npm_id)
-            values = self._host_values(raw, det)
-            if host is None:
-                host = self.hosts.add(
-                    DiscoveredHost(
-                        connection_id=conn.id,
-                        organization_id=conn.organization_id,
-                        npm_id=npm_id,
-                        first_seen_at=now,
-                        last_seen_at=now,
-                        ignored=False,
-                        **values,
-                    )
-                )
-                host.application = None
-                result.hosts_new += 1
-            else:
-                changed = host.removed_at is not None or any(getattr(host, k) != v for k, v in values.items())
-                for k, v in values.items():
-                    setattr(host, k, v)
-                host.last_seen_at = now
-                host.removed_at = None
-                if changed:
-                    result.hosts_updated += 1
-
-            if host.ignored or det.ignore:
-                continue
-            app = host.application
-            if app is None:
-                app = self.apps.add(
-                    Application(
-                        organization_id=conn.organization_id,
-                        source=AppSource.npm.value,
-                        auto_update=True,
-                        **self._app_values(det),
-                    )
-                )
-                host.application = app
-                result.applications_created += 1
-                created_apps.append(app.name)
-            elif app.auto_update:
-                values = self._app_values(det)
-                if any(getattr(app, k) != v for k, v in values.items()):
-                    for k, v in values.items():
-                        setattr(app, k, v)
-                    result.applications_updated += 1
+            created = await self._sync_host(conn, raw, existing.get(npm_id), now, result)
+            if created:
+                created_apps.append(created)
 
         removed_domains: list[str] = []
         for npm_id, host in existing.items():
@@ -389,6 +354,73 @@ class NpmService:
                 removed_domains.append(host.primary_domain)
         await self.db.flush()
         return created_apps, removed_domains
+
+    async def _sync_host(
+        self,
+        conn: NpmConnection,
+        raw: dict[str, Any],
+        host: DiscoveredHost | None,
+        now: datetime,
+        result: SyncResult | None = None,
+    ) -> str | None:
+        """Werkt één host en zijn catalogusitem bij. Geeft de naam van een nieuw item terug."""
+        det = analyze(raw)
+        values = self._host_values(raw, det)
+        if host is None:
+            host = self.hosts.add(
+                DiscoveredHost(
+                    connection_id=conn.id,
+                    organization_id=conn.organization_id,
+                    npm_id=raw["id"],
+                    first_seen_at=now,
+                    last_seen_at=now,
+                    ignored=False,
+                    **values,
+                )
+            )
+            host.application = None
+            if result:
+                result.hosts_new += 1
+        else:
+            changed = host.removed_at is not None or any(getattr(host, k) != v for k, v in values.items())
+            for k, v in values.items():
+                setattr(host, k, v)
+            host.last_seen_at = now
+            host.removed_at = None
+            if changed and result:
+                result.hosts_updated += 1
+
+        if host.ignored or det.ignore:
+            return None
+        app = host.application
+        if app is None:
+            app = self.apps.add(
+                Application(
+                    organization_id=conn.organization_id,
+                    source=AppSource.npm.value,
+                    auto_update=True,
+                    **self._app_values(det),
+                )
+            )
+            host.application = app
+            if result:
+                result.applications_created += 1
+            return app.name
+        if app.auto_update:
+            values = self._app_values(det)
+            if any(getattr(app, k) != v for k, v in values.items()):
+                for k, v in values.items():
+                    setattr(app, k, v)
+                if result:
+                    result.applications_updated += 1
+        return None
+
+    async def refresh_host(self, conn: NpmConnection, raw: dict[str, Any]) -> DiscoveredHost | None:
+        """Eén host bijwerken na een schrijfactie, zonder volledige sync (geen commit)."""
+        host = await self.hosts.by_npm_id(conn.id, raw["id"])
+        await self._sync_host(conn, raw, host, datetime.now(UTC))
+        await self.db.flush()
+        return await self.hosts.by_npm_id(conn.id, raw["id"])
 
     @staticmethod
     def _host_values(raw: dict[str, Any], det: Detection) -> dict[str, Any]:
@@ -414,6 +446,7 @@ class NpmService:
             "detected_auth": det.auth_method,
             "labels": det.labels,
             "warnings": det.warnings,
+            "vaultx_managed": det.managed,
         }
 
     @staticmethod

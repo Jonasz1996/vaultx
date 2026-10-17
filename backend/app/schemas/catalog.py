@@ -1,10 +1,12 @@
+import re
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.common import ORMModel
+from app.services.npm_protect import normalize_outpost_url
 
 AuthMethodLiteral = Literal["forward_auth", "oidc", "saml", "header", "access_list", "app", "none", "unknown"]
 # protected: aanmelding via Authentik (forward auth, OIDC, SAML, headers)
@@ -25,6 +27,24 @@ def _check_url(value: str | None) -> str | None:
     return value
 
 
+PROBE_HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.:-]{0,253}[A-Za-z0-9])?$")
+
+
+def _check_outpost(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    return normalize_outpost_url(value)
+
+
+def _check_probe_host(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    value = value.strip().strip("[]")
+    if not PROBE_HOST_RE.fullmatch(value):
+        raise ValueError("Geef enkel een hostnaam of IP-adres op, zonder http:// of poort")
+    return value
+
+
 class Warning_(BaseModel):
     code: str
     message: str
@@ -42,8 +62,26 @@ class NpmConnectionCreate(BaseModel):
     secret: str = Field(min_length=1, max_length=1024, description="Wachtwoord; wordt nooit teruggegeven")
     verify_tls: bool = True
     enabled: bool = True
+    write_enabled: bool = Field(
+        False, description="VaultX mag Authentik-bescherming zetten (account: Proxy Hosts = Manage)"
+    )
+    authentik_outpost_url: str | None = Field(
+        None,
+        max_length=2048,
+        description="Hoe nginx in NPM de Authentik-outpost bereikt",
+        examples=["http://authentik-server:9000"],
+    )
+    probe_host: str | None = Field(
+        None,
+        max_length=255,
+        description="Adres waarop VaultX de proxy hosts controleert; leeg = host van base_url",
+    )
+    probe_http_port: int = Field(80, ge=1, le=65535)
+    probe_https_port: int = Field(443, ge=1, le=65535)
 
     _url = field_validator("base_url")(_check_url)
+    _outpost = field_validator("authentik_outpost_url")(_check_outpost)
+    _probe = field_validator("probe_host")(_check_probe_host)
 
 
 class NpmConnectionUpdate(BaseModel):
@@ -53,8 +91,24 @@ class NpmConnectionUpdate(BaseModel):
     secret: str | None = Field(None, min_length=1, max_length=1024)
     verify_tls: bool | None = None
     enabled: bool | None = None
+    write_enabled: bool | None = None
+    # Lege string = wissen.
+    authentik_outpost_url: str | None = Field(None, max_length=2048)
+    probe_host: str | None = Field(None, max_length=255)
+    probe_http_port: int | None = Field(None, ge=1, le=65535)
+    probe_https_port: int | None = Field(None, ge=1, le=65535)
 
     _url = field_validator("base_url")(_check_url)
+
+    @field_validator("authentik_outpost_url")
+    @classmethod
+    def _outpost(cls, v: str | None) -> str | None:
+        return v if v == "" else _check_outpost(v)
+
+    @field_validator("probe_host")
+    @classmethod
+    def _probe(cls, v: str | None) -> str | None:
+        return v if v == "" else _check_probe_host(v)
 
 
 class NpmConnectionOut(ORMModel):
@@ -69,6 +123,11 @@ class NpmConnectionOut(ORMModel):
     last_sync_at: datetime | None
     last_sync_status: Literal["ok", "error"] | None
     last_sync_error: str | None
+    write_enabled: bool
+    authentik_outpost_url: str | None
+    probe_host: str | None
+    probe_http_port: int
+    probe_https_port: int
     created_at: datetime
     updated_at: datetime
     host_count: int = 0
@@ -108,6 +167,7 @@ class DiscoveredHostOut(ORMModel):
     detected_auth: AuthMethodLiteral
     labels: dict[str, str]
     warnings: list[Warning_]
+    vaultx_managed: bool
     ignored: bool
     first_seen_at: datetime
     last_seen_at: datetime
@@ -117,6 +177,65 @@ class DiscoveredHostOut(ORMModel):
 
 class DiscoveredHostUpdate(BaseModel):
     ignored: bool
+
+
+# ---------------------------------------------------------------- schrijven naar NPM (fase 3)
+
+ProtectionAction = Literal["protect", "unprotect"]
+
+
+class CheckOut(BaseModel):
+    code: str
+    level: Literal["block", "warn", "info"]
+    message: str
+
+
+class HostConfigOut(BaseModel):
+    """De velden die VaultX in NPM wijzigt, zoals NPM ze kent."""
+
+    advanced_config: str = ""
+    locations: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ProtectionPlanOut(BaseModel):
+    action: ProtectionAction
+    npm_id: int
+    domain: str
+    modified_on: str | None = Field(
+        description="Meesturen bij uitvoeren: zo weigert VaultX als de host intussen wijzigde"
+    )
+    can_apply: bool
+    checks: list[CheckOut]
+    steps: list[str]
+    before: HostConfigOut
+    after: HostConfigOut
+    probe_url: str | None = Field(description="Waar VaultX de host achteraf aanspreekt")
+
+
+class ProtectionApply(BaseModel):
+    action: ProtectionAction
+    expected_modified_on: str | None = None
+    verify: bool = Field(True, description="Host vooraf en achteraf aanspreken; bij een fout terugzetten")
+
+
+class NpmChangeOut(ORMModel):
+    id: UUID
+    connection_id: UUID
+    host_id: UUID | None
+    npm_id: int
+    domain: str
+    action: ProtectionAction
+    status: Literal["running", "applied", "rolled_back", "rollback_failed", "refused", "interrupted"]
+    verified: bool
+    actor_label: str | None
+    message: str | None
+    nginx_error: str | None
+    before: dict[str, Any]
+    after: dict[str, Any] | None
+    probe_before: dict[str, Any] | None
+    probe_after: dict[str, Any] | None
+    created_at: datetime
+    finished_at: datetime | None
 
 
 # ---------------------------------------------------------------- catalogus

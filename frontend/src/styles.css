@@ -174,3 +174,20 @@ pre.snippet { max-width: none; margin: 8px 0; }
 /* Kluis */
 .steps { margin: 0 0 8px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
 .stats + .card { margin-top: 16px; }
+
+/* NPM: Authentik-bescherming zetten */
+.modal-wide { width: min(880px, calc(100vw - 32px)); }
+.warn-box { background: var(--warn-bg); color: var(--warn-fg); padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; }
+.good-box { background: var(--good-bg); color: var(--good-fg); padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; }
+.checks { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.checks li { padding: 8px 10px; border-radius: 8px; }
+.checks .check-block { background: var(--bad-bg); color: var(--bad-fg); }
+.checks .check-warn { background: var(--warn-bg); color: var(--warn-fg); }
+.checks .check-info { background: var(--info-bg); color: var(--info-fg); }
+.config-diff { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.config-diff pre { max-width: none; max-height: 340px; margin: 4px 0 0; white-space: pre; }
+fieldset.form-group { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px 12px; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+fieldset.form-group legend { font-weight: 600; padding: 0 4px; }
+.grid-probe { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
+.grid-probe input { min-width: 0; width: 100%; box-sizing: border-box; }
+@media (max-width: 720px) { .config-diff { grid-template-columns: 1fr; } }

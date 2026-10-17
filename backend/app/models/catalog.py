@@ -1,22 +1,26 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
     Text,
     UniqueConstraint,
+    false,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin, new_uuid
+from app.models.base import Base, TimestampMixin, new_uuid, utcnow
 
 
 class AuthMethod(enum.StrEnum):
@@ -66,6 +70,15 @@ class NpmConnection(TimestampMixin, Base):
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_sync_status: Mapped[str | None] = mapped_column(String(16))
     last_sync_error: Mapped[str | None] = mapped_column(Text)
+    # Fase 3: mag VaultX naar deze NPM schrijven (Authentik-bescherming zetten)? Standaard niet.
+    write_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # Hoe nginx in NPM de Authentik-outpost bereikt, bv. http://authentik-server:9000.
+    authentik_outpost_url: Mapped[str | None] = mapped_column(String(2048))
+    # Waar VaultX de proxy hosts zelf aanspreekt om na een wijziging te controleren of ze werken.
+    # Leeg = de host uit base_url.
+    probe_host: Mapped[str | None] = mapped_column(String(255))
+    probe_http_port: Mapped[int] = mapped_column(Integer, default=80, server_default="80")
+    probe_https_port: Mapped[int] = mapped_column(Integer, default=443, server_default="443")
 
     hosts = relationship(
         "DiscoveredHost", back_populates="connection", cascade="all, delete-orphan", passive_deletes=True
@@ -141,6 +154,8 @@ class DiscoveredHost(Base):
     labels: Mapped[dict[str, str]] = mapped_column(JSONB, default=dict)
     # Lijst van {"code": ..., "message": ...}, zie services/npm_detect.py.
     warnings: Mapped[list[dict[str, str]]] = mapped_column(JSONB, default=list)
+    # Authentik-config staat er door VaultX op (fase 3, zie services/npm_protect.py).
+    vaultx_managed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     # Door de gebruiker genegeerd: krijgt geen catalogusitem (label vaultx.ignore werkt ook).
     ignored: Mapped[bool] = mapped_column(Boolean, default=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -153,3 +168,66 @@ class DiscoveredHost(Base):
     @property
     def primary_domain(self) -> str:
         return self.domain_names[0] if self.domain_names else ""
+
+
+class NpmChangeStatus(enum.StrEnum):
+    running = "running"  # bezig (of de node viel weg tijdens de wijziging, zie interrupted)
+    applied = "applied"  # gewijzigd en gecontroleerd
+    rolled_back = "rolled_back"  # controle faalde, oude config teruggezet
+    rollback_failed = "rollback_failed"  # terugzetten lukte niet: handwerk nodig, zie before
+    refused = "refused"  # niet uitgevoerd (controle vooraf faalde of host intussen gewijzigd)
+    interrupted = "interrupted"  # bleef op running staan; status in NPM onbekend
+
+
+class NpmChange(Base):
+    """Journaal van elke schrijfactie naar NPM, met de config van voor en na.
+
+    `before` is de momentopname waarmee VaultX terugzet; bij rollback_failed is
+    dat ook wat je met de hand terugzet. Eén lopende wijziging per host tegelijk
+    (unieke index), ook over meerdere VaultX-nodes heen.
+    """
+
+    __tablename__ = "npm_changes"
+    __table_args__ = (
+        CheckConstraint("action IN ('protect','unprotect')", name="action_valid"),
+        CheckConstraint(
+            "status IN ('running','applied','rolled_back','rollback_failed','refused','interrupted')",
+            name="status_valid",
+        ),
+        Index(
+            "uq_npm_changes_running_host",
+            "connection_id",
+            "npm_id",
+            unique=True,
+            postgresql_where=text("status = 'running'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("npm_connections.id", ondelete="CASCADE"), index=True
+    )
+    host_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("npm_hosts.id", ondelete="SET NULL"), index=True
+    )
+    npm_id: Mapped[int] = mapped_column(Integer)
+    domain: Mapped[str] = mapped_column(String(255))
+    action: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16))
+    verified: Mapped[bool] = mapped_column(Boolean, default=True)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    actor_label: Mapped[str | None] = mapped_column(String(320))
+    # {"advanced_config": ..., "locations": [...]}, zoals NPM ze teruggaf / zoals VaultX ze schreef.
+    before: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    probe_before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    probe_after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    message: Mapped[str | None] = mapped_column(Text)
+    nginx_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

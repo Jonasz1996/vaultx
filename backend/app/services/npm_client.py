@@ -1,8 +1,10 @@
 """Minimale client voor de REST API van Nginx Proxy Manager (getest tegen 2.16).
 
-Enkel lezen: aanmelden, versie en proxy hosts. VaultX schrijft in deze fase
-niets naar NPM. Een mislukte schrijfactie zet een host in NPM meteen offline
-(zie onderzoek 03, A9), dus dat komt pas met pre-validatie en rollback.
+Lezen: aanmelden, versie en proxy hosts. Schrijven (fase 3): één proxy host
+bijwerken. Let op: NPM test de nieuwe config met `nginx -t` en verwijdert ze bij
+een fout, met de host offline als gevolg, en antwoordt toch 200 (onderzoek 03,
+A9). Wie update_proxy_host gebruikt, moet `meta.nginx_online` in het antwoord
+controleren en zelf terugzetten; dat doet services/npm_write.py.
 """
 
 from __future__ import annotations
@@ -115,3 +117,17 @@ class NPMClient:
         if not isinstance(data, list):
             raise NPMError("Onverwacht antwoord van NPM op /nginx/proxy-hosts")
         return [h for h in data if isinstance(h, dict) and isinstance(h.get("id"), int)]
+
+    async def proxy_host(self, npm_id: int) -> dict[str, Any]:
+        path = f"/nginx/proxy-hosts/{int(npm_id)}"
+        data = await self._request("GET", path, params={"expand": "access_list"})
+        if not isinstance(data, dict) or data.get("id") != npm_id:
+            raise NPMError(f"Onverwacht antwoord van NPM op /nginx/proxy-hosts/{npm_id}")
+        return data
+
+    async def update_proxy_host(self, npm_id: int, changes: dict[str, Any]) -> dict[str, Any]:
+        """PUT met enkel de gewijzigde velden. Geeft de host terug zoals NPM hem opsloeg."""
+        data = await self._request("PUT", f"/nginx/proxy-hosts/{int(npm_id)}", json=changes)
+        if not isinstance(data, dict) or data.get("id") != npm_id:
+            raise NPMError(f"Onverwacht antwoord van NPM bij het bijwerken van host {npm_id}")
+        return data

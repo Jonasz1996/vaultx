@@ -50,7 +50,7 @@ from app.services.npm_client import NPMClient  # noqa: E402
 from app.services.oidc import OIDCProvider  # noqa: E402
 
 TABLES = (
-    "vault_ciphers, vault_folders, vault_devices, vault_accounts, "
+    "npm_changes, vault_ciphers, vault_folders, vault_devices, vault_accounts, "
     "npm_hosts, npm_connections, applications, "
     "user_sessions, memberships, teams, organizations, users, audit_logs"
 )
@@ -95,6 +95,7 @@ async def app(fake_npm: FakeNPM):
     application.state.npm_client_factory = lambda conn: NPMClient(
         conn.base_url, verify_tls=conn.verify_tls, transport=fake_npm.transport
     )
+    application.state.npm_prober = fake_npm.probe
     yield application
     await application.state.oidc.aclose()
 
