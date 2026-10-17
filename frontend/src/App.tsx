@@ -4,9 +4,13 @@ import { ApiError, loginUrl } from "./api/client";
 import { useMe } from "./api/hooks";
 import { Layout } from "./components/Layout";
 import { ErrorBox, Loading } from "./components/ui";
+import { ApplicationDetailPage } from "./pages/ApplicationDetail";
 import { AuditPageView } from "./pages/Audit";
+import { CatalogPage } from "./pages/Catalog";
 import { DashboardPage } from "./pages/Dashboard";
 import { LoginPage } from "./pages/Login";
+import { NpmConnectionDetailPage } from "./pages/NpmConnectionDetail";
+import { NpmConnectionsPage } from "./pages/NpmConnections";
 import { OrganizationDetailPage } from "./pages/OrganizationDetail";
 import { OrganizationsPage } from "./pages/Organizations";
 import { TeamDetailPage } from "./pages/TeamDetail";
@@ -50,6 +54,10 @@ export const router = createBrowserRouter([
           { path: "organizations/:orgId", element: <OrganizationDetailPage /> },
           { path: "organizations/:orgId/teams/:teamId", element: <TeamDetailPage /> },
           { path: "teams", element: <TeamsPage /> },
+          { path: "catalog", element: <CatalogPage /> },
+          { path: "catalog/:orgId/:appId", element: <ApplicationDetailPage /> },
+          { path: "npm", element: <NpmConnectionsPage /> },
+          { path: "npm/:orgId/:connId", element: <NpmConnectionDetailPage /> },
           { path: "audit", element: <AuditPageView /> },
         ],
       },

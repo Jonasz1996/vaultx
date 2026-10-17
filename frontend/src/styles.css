@@ -156,3 +156,17 @@ input:disabled { background: var(--surface-2); color: var(--muted); }
   .grid-2 { grid-template-columns: 1fr; }
 }
 .whoami .btn { align-self: flex-start; padding-left: 0; }
+
+/* Catalogus en NPM */
+.stack { display: flex; flex-direction: column; gap: 2px; }
+.warnings { margin: 4px 0 0; padding-left: 16px; color: var(--warn-fg); }
+.warnings li { margin: 2px 0; }
+tr.dim td { opacity: 0.6; }
+.check { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.check input { width: auto; }
+.grid-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+pre.snippet { max-width: none; margin: 8px 0; }
+.stat-button { font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.stat-button:hover { background: var(--surface-2); }
+.stat-button.selected { outline: 2px solid var(--primary); outline-offset: -1px; }
+.modal .field select { width: 100%; }

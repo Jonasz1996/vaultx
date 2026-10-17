@@ -24,6 +24,7 @@ async def search_audit(
         str | None, Query(max_length=64, description="Prefix, bv. 'auth.' of 'membership.'")
     ] = None,
     outcome: Literal["success", "failure", "denied"] | None = None,
+    target_id: Annotated[str | None, Query(max_length=64, description="Bv. de id van een applicatie")] = None,
     since: datetime | None = None,
     until: datetime | None = None,
 ) -> AuditPage:
@@ -36,6 +37,7 @@ async def search_audit(
         actor_user_id=actor_user_id,
         action=action,
         outcome=outcome,
+        target_id=target_id,
         since=since,
         until=until,
     )

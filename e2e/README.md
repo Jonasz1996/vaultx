@@ -22,3 +22,20 @@ docker compose -f docker/authentik/compose.yml up -d
 pip install playwright && playwright install chromium
 python e2e/authentik_e2e.py ./e2e-shots
 ```
+
+# End-to-end test met echte Nginx Proxy Manager
+
+`npm_e2e.py` maakt in NPM een reeks proxy hosts onder `.vaultx-e2e.test` aan
+(officieel Authentik-patroon, access list met "Satisfy Any", labels, een host
+met een nginx-fout) en controleert wat de VaultX-connector eruit afleidt. Op
+een verse NPM maakt het script eerst de eerste gebruiker aan. CI draait dit
+tegen NPM 2.16.0.
+
+```bash
+docker run -d --name npm -p 81:81 -v npmdata:/data -v npmle:/etc/letsencrypt \
+  docker.io/jc21/nginx-proxy-manager:2.16.0
+cd backend && python ../e2e/npm_e2e.py http://localhost:81 admin@example.com een-lang-wachtwoord
+
+# Enkel demo-hosts zetten (bv. om de UI te bekijken), zonder controle:
+python ../e2e/npm_e2e.py http://localhost:81 admin@example.com een-lang-wachtwoord --seed-only
+```
