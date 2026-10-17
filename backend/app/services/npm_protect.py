@@ -319,6 +319,14 @@ def plan_protect(host: dict[str, Any], outpost_url: str | None) -> Plan:
         plan.warn(
             "tls_not_forced", "TLS is niet afgedwongen: wie via http binnenkomt, krijgt geen sessiecookie."
         )
+    if host.get("block_exploits") and not (host.get("certificate_id") and host.get("ssl_forced")):
+        # block-exploits.conf van NPM weigert een query string met "=http://" (403). De aanmeldredirect
+        # van Authentik draagt ?rd=http://... zodra iemand de host over http opent.
+        plan.warn(
+            "block_exploits_http",
+            "'Block Common Exploits' staat aan en de host is over http bereikbaar. NPM weigert dan de "
+            "aanmeldredirect van Authentik (?rd=http://…) met 403. Dwing TLS af, of zet die optie uit.",
+        )
     own_login = analyze(host).auth_method
     if own_login in {"oidc", "saml"}:
         plan.warn(

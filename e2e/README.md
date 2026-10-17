@@ -62,6 +62,33 @@ VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
   --proxy 127.0.0.1 --http-port 8080 --https-port 8443
 ```
 
+# End-to-end test fase 4: echte Authentik én echte NPM
+
+`authentik_npm_e2e.py` test "Beschermen met Authentik" in één stap. Het maakt
+met het beheertoken van Authentik een serviceaccount met enkel de rechten uit
+docs/npm.md (sectie 6) en start VaultX met dát token. Dan: outposts opvragen,
+een host beschermen met toegang voor de organisatie (VaultX maakt provider,
+applicatie, groepsbinding en outpost-toewijzing aan en controleert met de
+echte ingebouwde outpost), met `--browser` aanmelden in Chromium (alice, lid
+van `vaultx:<org>`, komt bij de app; eve wordt door Authentik geweigerd), een
+host met toegang voor iedereen, weghalen (Authentik-objecten weg) en een
+outpost-URL die niet antwoordt (NPM en Authentik teruggedraaid).
+
+NPM moet poort 80 aanbieden (de browser gebruikt gewone http-URL's) en
+Authentik bereiken op `--outpost-url` (standaard `http://172.17.0.1:9000`).
+
+```bash
+# Authentik met een vast beheertoken (AUTHENTIK_BOOTSTRAP_TOKEN), bv. via docker/authentik/compose.yml
+docker run -d --name npm -p 81:81 -p 80:80 -v npmdata:/data -v npmle:/etc/letsencrypt \
+  docker.io/jc21/nginx-proxy-manager:2.16.0
+cd backend
+python ../e2e/npm_e2e.py http://localhost:81 admin@example.com een-lang-wachtwoord   # maakt de NPM-gebruiker aan
+pip install playwright==1.56.0 && playwright install chromium
+VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
+  python ../e2e/authentik_npm_e2e.py http://localhost:81 admin@example.com een-lang-wachtwoord \
+  --authentik http://localhost:9000 --authentik-token <beheertoken> --browser
+```
+
 # End-to-end test met de officiële Bitwarden CLI
 
 `bitwarden_e2e.py` start zelf een nep-Authentik (OIDC) en de VaultX-backend met

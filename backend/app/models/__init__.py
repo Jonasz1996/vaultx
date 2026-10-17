@@ -3,6 +3,7 @@ from app.models.base import Base
 from app.models.catalog import (
     Application,
     AppSource,
+    AuthentikProtection,
     AuthMethod,
     DiscoveredHost,
     NpmChange,
@@ -20,6 +21,7 @@ __all__ = [
     "Application",
     "AuditLog",
     "AuthMethod",
+    "AuthentikProtection",
     "Base",
     "DiscoveredHost",
     "KdfType",

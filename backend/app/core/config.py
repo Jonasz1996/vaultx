@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -56,6 +57,18 @@ class Settings(BaseSettings):
     npm_sync_interval_minutes: int = Field(15, ge=0)
     npm_http_timeout_seconds: float = 15.0
 
+    # Authentik-API (fase 4): VaultX maakt bij "Beschermen met Authentik" zelf de proxy provider,
+    # de applicatie en de outpost-toewijzing aan. Leeg token = uit. Gebruik een serviceaccount met
+    # enkel de rechten uit docs/npm.md, geen superuser-token.
+    # Basis-URL van Authentik; leeg = scheme en host van VAULTX_OIDC_ISSUER.
+    authentik_api_url: str | None = None
+    authentik_api_token: SecretStr | None = None
+    authentik_verify_tls: bool = True
+    authentik_http_timeout_seconds: float = 15.0
+    # Flows voor de proxy providers die VaultX aanmaakt (slugs, standaard die van Authentik zelf).
+    authentik_authorization_flow: str = "default-provider-authorization-implicit-consent"
+    authentik_invalidation_flow: str = "default-provider-invalidation-flow"
+
     # Kluis voor Bitwarden-clients (fase 2)
     vault_enabled: bool = True
     # Levensduur van een access token voor Bitwarden-clients.
@@ -77,6 +90,22 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_slash(cls, value: str) -> str:
         return value.rstrip("/")
+
+    @field_validator("authentik_api_url")
+    @classmethod
+    def _strip_ak_url(cls, value: str | None) -> str | None:
+        return value.strip().rstrip("/") or None if value else None
+
+    @property
+    def authentik_base_url(self) -> str:
+        if self.authentik_api_url:
+            return self.authentik_api_url
+        parts = urlsplit(self.oidc_issuer)
+        return f"{parts.scheme}://{parts.netloc}"
+
+    @property
+    def authentik_api_enabled(self) -> bool:
+        return bool(self.authentik_api_token and self.authentik_api_token.get_secret_value())
 
     @property
     def discovery_url(self) -> str:

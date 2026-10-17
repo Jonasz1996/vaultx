@@ -185,7 +185,12 @@ export function NpmConnectionsPage() {
             </select>
           </label>
         )}
-        <ConnectionForm onSubmit={(v) => create.mutate(v)} error={create.error} pending={create.isPending} />
+        <ConnectionForm
+          orgId={createOrg}
+          onSubmit={(v) => create.mutate(v)}
+          error={create.error}
+          pending={create.isPending}
+        />
       </Modal>
     </>
   );

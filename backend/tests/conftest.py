@@ -16,6 +16,8 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from tests.fake_authentik import TOKEN as AUTHENTIK_TOKEN
+from tests.fake_authentik import FakeAuthentik
 from tests.fake_npm import FakeNPM
 from tests.fake_oidc import FakeOIDCProvider
 
@@ -40,17 +42,20 @@ os.environ.update(
         "VAULTX_COOKIE_SECURE": "false",
         "VAULTX_LOG_LEVEL": "WARNING",
         "VAULTX_NPM_SYNC_INTERVAL_MINUTES": "0",
+        "VAULTX_AUTHENTIK_API_URL": "http://authentik.test",
+        "VAULTX_AUTHENTIK_API_TOKEN": AUTHENTIK_TOKEN,
     }
 )
 
 from app.core.config import get_settings  # noqa: E402
 from app.core.db import get_engine  # noqa: E402
 from app.main import create_app  # noqa: E402
+from app.services.authentik_client import AuthentikClient  # noqa: E402
 from app.services.npm_client import NPMClient  # noqa: E402
 from app.services.oidc import OIDCProvider  # noqa: E402
 
 TABLES = (
-    "npm_changes, vault_ciphers, vault_folders, vault_devices, vault_accounts, "
+    "authentik_protections, npm_changes, vault_ciphers, vault_folders, vault_devices, vault_accounts, "
     "npm_hosts, npm_connections, applications, "
     "user_sessions, memberships, teams, organizations, users, audit_logs"
 )
@@ -88,14 +93,22 @@ def fake_npm() -> FakeNPM:
     return FakeNPM()
 
 
+@pytest.fixture
+def fake_authentik() -> FakeAuthentik:
+    return FakeAuthentik()
+
+
 @pytest_asyncio.fixture
-async def app(fake_npm: FakeNPM):
+async def app(fake_npm: FakeNPM, fake_authentik: FakeAuthentik):
     application = create_app()
     application.state.oidc = OIDCProvider(get_settings())
     application.state.npm_client_factory = lambda conn: NPMClient(
         conn.base_url, verify_tls=conn.verify_tls, transport=fake_npm.transport
     )
     application.state.npm_prober = fake_npm.probe
+    application.state.authentik_client_factory = lambda: AuthentikClient(
+        "http://authentik.test", AUTHENTIK_TOKEN, transport=fake_authentik.transport
+    )
     yield application
     await application.state.oidc.aclose()
 

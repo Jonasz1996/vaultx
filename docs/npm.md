@@ -8,8 +8,12 @@ Zet je schrijven aan op de koppeling, dan kan een beheerder per host
 wat het wijzigt, controleert de host achteraf en zet bij een fout de vorige
 config terug.
 
-Getest tegen NPM 2.16.0 (CI start bij elke push een echte NPM, zie
-`e2e/npm_e2e.py` en `e2e/npm_write_e2e.py`).
+Sinds fase 4 kan VaultX daarbij ook de **Authentik-kant** zelf aanmaken
+(provider, applicatie, toegang, outpost; sectie 6), zodat beschermen één stap is.
+
+Getest tegen NPM 2.16.0 en Authentik 2026.8.3 (CI start bij elke push een
+echte NPM en een echte Authentik, zie `e2e/npm_e2e.py`, `e2e/npm_write_e2e.py`
+en `e2e/authentik_npm_e2e.py`).
 
 ## 1. Een NPM-account voor VaultX
 
@@ -127,9 +131,10 @@ in de host.
 
 1. **In Authentik**: een *Proxy Provider* in forward-auth-modus voor het domein
    (*single application* met de externe URL van de host, of *domain level*),
-   met een applicatie, en toegewezen aan een outpost. VaultX maakt die nog niet
-   zelf aan. Zonder provider antwoordt de outpost niet met een aanmelding; de
-   controle achteraf faalt dan en VaultX zet terug.
+   met een applicatie, en toegewezen aan een outpost. Kies je op de koppeling
+   een outpost, dan maakt VaultX dat zelf aan (sectie 6). Zonder provider
+   antwoordt de outpost niet met een aanmelding; de controle achteraf faalt dan
+   en VaultX zet terug.
 2. **Op de koppeling** (*Bewerken*):
    - **VaultX mag proxy hosts in deze NPM wijzigen** aanzetten (standaard uit), en
      het NPM-account *Proxy Hosts: Manage* geven.
@@ -178,7 +183,9 @@ het tegenhoudt. Het weigert als:
 
 En het waarschuwt (`no_tls`, `tls_not_forced`, `app_has_login` voor een app
 die zelf al via OIDC/SAML aanmeldt, `no_probe` voor een host met enkel
-wildcard-domeinen).
+wildcard-domeinen, `block_exploits_http` als *Block Common Exploits* aanstaat op
+een host die over http bereikbaar is: NPM weigert dan de aanmeldredirect
+`?rd=http://…` met 403, gezien tegen NPM 2.16.0).
 
 ### Uitvoeren, controleren, terugzetten
 
@@ -212,6 +219,92 @@ Grenzen:
   onbereikbaar op het controleadres), dan kan je uitvoeren zonder controle.
   VaultX zet dan enkel terug als nginx de config weigert.
 
+## 6. Authentik-kant automatisch aanmaken
+
+Kies je op de koppeling bij **Authentik-kant automatisch aanmaken** een
+outpost, dan doet **Beschermen met Authentik** ook dit in Authentik, vóór VaultX
+NPM wijzigt:
+
+1. een **proxy provider** `VaultX: <domein>` in modus *Forward auth (single
+   application)*, met als externe URL `https://<domein>` (of `http://` als de
+   host geen certificaat heeft) en de standaardflows van Authentik;
+2. een **applicatie** met de naam uit de catalogus en slug `vaultx-<domein>`;
+3. de **toegang** die je in het voorbeeld kiest (zie hieronder);
+4. de provider op de gekozen **outpost** zetten.
+
+Daarna zet VaultX de config in NPM en controleert het met de echte outpost: een
+bezoeker zonder sessie moet naar Authentik gaan. Een outpost laadt een nieuwe
+provider pas na enkele seconden (tegen Authentik 2026.8.3 gemeten: 7 tot 11
+seconden); VaultX probeert daarom tot 30 seconden. Faalt de controle, of een
+stap in Authentik, dan draait VaultX beide kanten terug: de vorige config in
+NPM en wat het in Authentik aanmaakte. **Bescherming weghalen** ruimt na de
+wijziging in NPM op wat VaultX in Authentik aanmaakte; wat er al stond, blijft.
+
+### Toegang
+
+| Keuze | Gebonden Authentik-groepen |
+| --- | --- |
+| Leden van deze organisatie (standaard) | `vaultx:<org>`, `vaultx:<org>:<rol>` en `vaultx:<org>/<team>[:<rol>]` |
+| Leden van team *X* | `vaultx:<org>/<x>` en `vaultx:<org>/<x>:<rol>` |
+| Alle Authentik-gebruikers | geen binding (iedereen met een account) |
+
+Het prefix `vaultx:` volgt `VAULTX_OIDC_GROUP_PREFIX`, dezelfde conventie als
+voor de lidmaatschappen (docs/authentik.md). Bestaat er geen enkele passende
+groep, dan weigert VaultX: maak de groep aan, of kies *Alle
+Authentik-gebruikers*. Wie geen lid is, krijgt na de aanmelding van Authentik
+"Permission denied".
+
+### Bestaande providers
+
+- Er is al een provider met dezelfde externe host: VaultX gebruikt die. Heeft
+  hij nog geen applicatie, dan maakt VaultX er een; staat hij niet op de
+  outpost, dan zet VaultX hem erop. Bij weghalen draait VaultX enkel die
+  stappen terug; de provider zelf blijft.
+- Een *domain level*-provider op de outpost dekt het domein al (cookie domain):
+  VaultX maakt niets aan.
+- Een provider in *proxy*-modus voor dat domein: VaultX weigert.
+
+### Instellen
+
+1. **Serviceaccount in Authentik.** Maak een rol met enkel deze globale
+   rechten, een groep met die rol en een serviceaccount in die groep, en een
+   API-token (*Directory → Tokens*, intent *API*) voor dat account:
+
+   | Recht | Waarom |
+   | --- | --- |
+   | `authentik_providers_proxy.view_proxyprovider`, `add_proxyprovider`, `delete_proxyprovider` | Providers zoeken, aanmaken en opruimen |
+   | `authentik_core.view_application`, `add_application`, `delete_application` | Applicatie aanmaken en opruimen |
+   | `authentik_core.view_group` | Groepen voor de toegang vinden |
+   | `authentik_policies.add_policybinding` | Groep aan de applicatie binden |
+   | `authentik_outposts.view_outpost`, `change_outpost` | Provider op de outpost zetten |
+   | `authentik_flows.view_flow` | De standaardflows vinden |
+
+   Precies deze lijst is getest (de e2e-test maakt zo'n account). Gebruik geen
+   superuser-token: daarmee kan VaultX alles in Authentik.
+2. **Op de VaultX-server**: `VAULTX_AUTHENTIK_API_TOKEN=<token>` en, als
+   Authentik niet op de host van `VAULTX_OIDC_ISSUER` draait,
+   `VAULTX_AUTHENTIK_API_URL`. Andere flows kies je met
+   `VAULTX_AUTHENTIK_AUTHORIZATION_FLOW` en `VAULTX_AUTHENTIK_INVALIDATION_FLOW`
+   (slugs).
+3. **Bij de outpost in Authentik**: vul `authentik_host` in met de publieke URL
+   van Authentik (bij de ingebouwde outpost staat die leeg). Daarheen stuurt de
+   outpost een browser om zich aan te melden. VaultX waarschuwt als die leeg is.
+4. **Op de koppeling** (*Bewerken*): kies de outpost. De lijst komt live uit
+   Authentik.
+
+Grenzen:
+
+- De provider dekt één domein. Heeft de host er meerdere, dan waarschuwt
+  VaultX: op de andere domeinen geeft de outpost een fout.
+- De providerlijst van een outpost wordt gelezen en meteen teruggeschreven;
+  wie op hetzelfde moment in Authentik dezelfde outpost wijzigt, kan
+  overschreven worden.
+- Verwijder je de NPM-koppeling, dan blijven de Authentik-objecten staan. Haal
+  eerst de bescherming weg als je ze kwijt wil.
+- De auditlog (`npm_host.protect` / `npm_host.unprotect`) en het journaal tonen
+  per wijziging welke provider, applicatie en groepen VaultX aanmaakte,
+  terugdraaide of opruimde.
+
 ## API
 
 | Methode | Pad | |
@@ -226,11 +319,18 @@ Grenzen:
 | GET | `/api/v1/organizations/{org}/npm-connections/{id}/hosts/{host}/protection?action=protect` | Voorbeeld: controles, stappen, config ervoor en erna |
 | POST | `/api/v1/organizations/{org}/npm-connections/{id}/hosts/{host}/protection` | `{"action": "protect", "expected_modified_on": "...", "verify": true}`; antwoordt met de wijziging en haar status (`applied`, `rolled_back`, `rollback_failed`, `refused`) |
 | GET | `/api/v1/organizations/{org}/npm-connections/{id}/changes?host_id=` | Journaal |
+| GET | `/api/v1/organizations/{org}/authentik/outposts` | Proxy-outposts in Authentik, om op een koppeling te kiezen |
+
+Fase 4: de koppeling heeft `authentik_outpost_pk` (leeg = niets aanmaken in
+Authentik). Het voorbeeld en het uitvoeren nemen `access`: `organization`
+(standaard), `team:<slug>` of `all`; het voorbeeld geeft in `authentik` wat
+VaultX in Authentik doet, het journaal in `authentik` wat het deed.
 
 Volledige schema's op `/api/docs`.
 
 ## Nog niet
 
-- De Authentik-kant (provider, applicatie, outpost) automatisch aanmaken.
 - Access lists genereren, nieuwe proxy hosts aanmaken, meerdere hosts tegelijk
   beschermen.
+- De toegang van een al beschermde host wijzigen (nu: weghalen en opnieuw
+  beschermen), en OIDC-providers in plaats van forward auth aanmaken.

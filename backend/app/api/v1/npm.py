@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from app.api.deps import CurrentPrincipal, DbSession, SettingsDep
 from app.api.v1.catalog import host_out
 from app.schemas.catalog import (
+    ACCESS_PATTERN,
     DiscoveredHostOut,
     DiscoveredHostUpdate,
     NpmChangeOut,
@@ -34,7 +35,11 @@ NpmDep = Annotated[NpmService, Depends(npm_service)]
 def npm_write_service(request: Request, db: DbSession, settings: SettingsDep) -> NpmWriteService:
     state = request.app.state
     return NpmWriteService(
-        db, settings, getattr(state, "npm_client_factory", None), getattr(state, "npm_prober", None)
+        db,
+        settings,
+        getattr(state, "npm_client_factory", None),
+        getattr(state, "npm_prober", None),
+        getattr(state, "authentik_client_factory", None),
     )
 
 
@@ -120,8 +125,9 @@ async def preview_protection(
     p: CurrentPrincipal,
     svc: NpmWriteDep,
     action: Annotated[ProtectionAction, Query()] = "protect",
+    access: Annotated[str, Query(pattern=ACCESS_PATTERN)] = "organization",
 ):
-    view = await svc.preview(p, org_id, conn_id, host_id, action)
+    view = await svc.preview(p, org_id, conn_id, host_id, action, access)
     plan = view.plan
     return ProtectionPlanOut(
         action=plan.action,
@@ -134,6 +140,7 @@ async def preview_protection(
         before=plan.before,
         after=plan.after,
         probe_url=view.probe.url if view.probe else None,
+        authentik=view.authentik,
     )
 
 
@@ -158,6 +165,7 @@ async def apply_protection(
         data.action,
         expected_modified_on=data.expected_modified_on,
         verify=data.verify,
+        access=data.access,
     )
 
 

@@ -108,6 +108,8 @@ class FakeNPM:
         # Tijdens een PUT naar NPM laten mislukken (bv. om een mislukte rollback na te bootsen).
         self.fail_puts_after: int | None = None
         self.probe_down = False
+        # Fase 4: met een nep-Authentik antwoordt de outpost enkel voor domeinen die hij kent.
+        self.authentik: Any = None
         self.transport = httpx.MockTransport(self._handle)
 
     def host(self, npm_id: int) -> dict[str, Any] | None:
@@ -173,6 +175,9 @@ class FakeNPM:
             r"location /outpost\.goauthentik\.io \{\s*proxy_pass\s+https?://([^:/;\s]+)", configs[0]
         )
         if outpost is None or outpost.group(1) in self.dead_outposts:
+            return ProbeResult(url=url, status=500)
+        if self.authentik is not None and not self.authentik.serves(t.domain):
+            # Outpost kent het domein niet: auth_request krijgt 404, nginx geeft 500.
             return ProbeResult(url=url, status=500)
         return ProbeResult(
             url=url, status=302, location=f"/outpost.goauthentik.io/start?rd=https://{t.domain}/"
