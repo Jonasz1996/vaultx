@@ -7,8 +7,18 @@ fundering), **fase 1** (NPM-connector en applicatiecatalogus), **fase 2**
 (Authentik-bescherming zetten in NPM), **fase 4** (ook de Authentik-kant
 automatisch aanmaken), **fase 5** (automatische login: wie al bij Authentik
 is aangemeld, komt meteen in de app), **fase 6** (app publiceren), **fase 7**
-(versleutelde notities zoals in Obsidian) en **fase 8** (inloggen met een
-gewoon account, naast Authentik).
+(versleutelde notities zoals in Obsidian), **fase 8** (inloggen met een
+gewoon account, naast Authentik) en **fase 9** (wat de Bitwarden-apps nog
+misten tegenover Bitwarden en Vaultwarden).
+
+**Fase 9**
+
+- Importeren vanuit de Bitwarden-apps en `bw import` (bv. je Vaultwarden-export), met mappen
+- Bijlagen bij items (tot 100 MB per bestand), versleuteld door de app
+- Websitepictogrammen, opgehaald door VaultX zelf; privé-adressen enkel voor je eigen apps uit NPM en de catalogus
+- Tweestapsverificatie voor de apps met een authenticator-app, herstelcode en "onthoud mij"
+- Master password wijzigen op Mijn kluis, ook overstappen naar Argon2id; alle apparaten worden afgemeld
+- Alles getest met de echte Bitwarden CLI 2026.9.1 in CI. Zie [docs/bitwarden.md](docs/bitwarden.md)
 
 **Fase 8**
 
