@@ -2,11 +2,15 @@
 
 import re
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+# Request-ID van de lopende request, voor de logregels (zie core/logging.py).
+current_request_id: ContextVar[str] = ContextVar("current_request_id", default="-")
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,4 +40,8 @@ class RequestIdMiddleware:
                 message.setdefault("headers", []).append((b"x-request-id", request_id.encode()))
             await send(message)
 
-        await self.app(scope, receive, send_with_id)
+        token = current_request_id.set(request_id)
+        try:
+            await self.app(scope, receive, send_with_id)
+        finally:
+            current_request_id.reset(token)

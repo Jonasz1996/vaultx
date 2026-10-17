@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CSRF_HEADER, DbSession, MetaDep, OIDCDep, SettingsDep
 from app.core.config import Settings
@@ -122,15 +123,22 @@ async def callback(
         log.warning("Login mislukt: %s", exc.message)
         return await fail("token_invalid", exc.message)
 
-    try:
-        result = await IdentityService(db, settings).login_from_claims(claims, meta)
-    except PermissionDeniedError:
-        return _error_redirect(settings, "account_disabled")
-
-    token, _ = await SessionService(db, settings).create(
-        result.user, meta=meta, oidc_sid=claims.get("sid"), id_token=tokens["id_token"]
-    )
-    await db.commit()
+    # Twee gelijktijdige eerste logins van dezelfde gebruiker (of nieuwe organisaties uit de
+    # groepen) botsen op een unieke sleutel: dan één keer opnieuw, nu bestaat de rij al.
+    for attempt in range(2):
+        try:
+            result = await IdentityService(db, settings).login_from_claims(claims, meta)
+            token, _ = await SessionService(db, settings).create(
+                result.user, meta=meta, oidc_sid=claims.get("sid"), id_token=tokens["id_token"]
+            )
+            await db.commit()
+            break
+        except PermissionDeniedError:
+            return _error_redirect(settings, "account_disabled")
+        except IntegrityError:
+            await db.rollback()
+            if attempt:
+                raise
 
     resp = RedirectResponse(f"{settings.public_url}{saved['next']}", status_code=303)
     resp.delete_cookie(STATE_COOKIE, path="/auth")

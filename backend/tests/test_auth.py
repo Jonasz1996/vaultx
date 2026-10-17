@@ -199,3 +199,15 @@ async def test_callback_without_state_cookie_writes_no_audit_row(make_client, ad
         assert "error=idp_error" in r.headers["location"]
     items = (await admin.get("/api/v1/audit", params={"action": "auth.login"})).json()["items"]
     assert not any(i["outcome"] == "failure" for i in items)
+
+
+async def test_simultaneous_first_logins_both_succeed(make_client):
+    import asyncio
+
+    a, b = await make_client(), await make_client()
+    ra, rb = await asyncio.gather(
+        a.login("dave", groups=["vaultx:nieuw"]), b.login("dave", groups=["vaultx:nieuw"])
+    )
+    assert ra.status_code == rb.status_code == 303, (ra.text, rb.text)
+    for c in (a, b):
+        assert (await c.get("/api/v1/me")).status_code == 200
