@@ -99,9 +99,15 @@ async def callback(
         saved = _serializer(settings).loads(raw, max_age=STATE_MAX_AGE) if raw else None
     except BadSignature:
         saved = None
+    if not saved:
+        # Geen (geldige) state-cookie: deze browser startte geen login. Niet in de auditlog, anders
+        # kan iedereen zonder login die (gehashte, append-only) log volschrijven.
+        log.info("OIDC-callback zonder geldige state-cookie (error=%r)", (error or "")[:40])
+        return _error_redirect(settings, "idp_error" if error else "invalid_state")
     if error:
-        return await fail("idp_error", error[:100])
-    if not saved or not state or not code or not hmac.compare_digest(saved["s"], state):
+        # Enkel een OAuth-foutcode (bv. access_denied) bewaren, geen vrije tekst van de aanroeper.
+        return await fail("idp_error", error if re.fullmatch(r"[a-z_]{1,40}", error) else "other")
+    if not state or not code or not hmac.compare_digest(saved["s"], state):
         return await fail("invalid_state")
 
     try:

@@ -1,0 +1,9 @@
+# /etc/systemd/system/vaultx-backup.service — zie docs/backup.md
+[Unit]
+Description=VaultX back-up (pg_dump en config)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/vaultx/deploy/debian/backup.sh
+UMask=0077

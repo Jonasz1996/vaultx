@@ -7,11 +7,25 @@ Nginx Proxy Manager ervoor. Voor Docker: zie de README.
 
 ```bash
 apt update
-apt install -y nginx git curl python3 python3-venv postgresql nodejs npm
+apt install -y nginx git curl python3 python3-venv postgresql
+
+# Node 22: de frontend (react-router, Mermaid) vraagt Node 22.12 of nieuwer, Debian 13 levert 20
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt install -y nodejs
 ```
 
-Debian 13 levert PostgreSQL 17 en Node 20; beide werken. Wil je PostgreSQL 18
-(de keuze uit het ontwerpdossier), gebruik dan de PGDG-repository.
+Debian 13 levert PostgreSQL 17; dat werkt. Wil je PostgreSQL 18 (de keuze uit
+het ontwerpdossier), gebruik dan de PGDG-repository.
+
+Proxmox-templates hebben vaak geen locale. Maakt PostgreSQL dan een
+`SQL_ASCII`-database, dan faalt de eerste migratie ("cannot use a string pattern
+on a bytes-like object"). Maak de cluster dan opnieuw aan met UTF-8 (wist alle
+databases in die cluster):
+
+```bash
+pg_dropcluster 17 main --stop
+pg_createcluster 17 main --locale C.UTF-8 --start
+```
 
 ## 2. Database
 
@@ -35,7 +49,7 @@ cd /opt/vaultx/frontend && npm ci && npm run build   # levert frontend/dist
 
 ```bash
 mkdir -p /etc/vaultx
-cp /opt/vaultx/docker/.env.example /etc/vaultx/vaultx.env
+cp /opt/vaultx/deploy/debian/vaultx.env.example /etc/vaultx/vaultx.env
 chmod 640 /etc/vaultx/vaultx.env && chgrp vaultx /etc/vaultx/vaultx.env
 ```
 
@@ -50,7 +64,8 @@ VAULTX_OIDC_CLIENT_ID=...
 VAULTX_OIDC_CLIENT_SECRET=...
 ```
 
-De Authentik-kant staat in [authentik.md](authentik.md).
+De Authentik-kant staat in [authentik.md](authentik.md). Alle andere opties staan
+met hun standaardwaarde in `deploy/debian/vaultx.env.example`.
 
 ## 5. systemd en nginx
 
@@ -83,8 +98,26 @@ naar `/auth/backchannel-logout` blokkeren.
 ## Updaten
 
 ```bash
-cd /opt/vaultx && git pull
-/opt/vaultx/venv/bin/pip install -r backend/requirements.txt
-(cd frontend && npm ci && npm run build)
-systemctl restart vaultx     # migreert automatisch
+/opt/vaultx/deploy/debian/update.sh                          # huidige branch bijwerken
+/opt/vaultx/deploy/debian/update.sh phase-7/notes-ts9df7     # of: naar een andere branch overstappen
 ```
+
+Het script maakt eerst een back-up van de database en `/etc/vaultx/vaultx.env`
+in `/var/backups/vaultx`, haalt de code op, installeert de Python-pakketten,
+bouwt de frontend, vernieuwt de systemd-unit en de nginx-site (de vorige versie
+blijft naast het bestand als `.bak-<tijd>`; weigert `nginx -t` de nieuwe, dan
+zet het de oude terug), herstart VaultX (dat migreert de database) en wacht
+tot `/health/ready` antwoordt. Lukt dat niet, dan toont het de log en hoe je
+terugzet (zie [backup.md](backup.md)).
+
+Heb je in `/etc/nginx/sites-available/vaultx` zelf iets aangepast (bv.
+`set_real_ip_from` beperkt tot je NPM-host), zet dat dan na het updaten opnieuw
+in de nieuwe versie; het oude bestand staat ernaast als `.bak-<tijd>`.
+
+Stap niet over naar `main` zolang daar enkel het ontwerpdossier staat: de code
+zit voorlopig op de fase-branches.
+
+## Back-up
+
+Zie [backup.md](backup.md): een systemd-timer maakt elke nacht een `pg_dump`
+en een kopie van de configuratie.

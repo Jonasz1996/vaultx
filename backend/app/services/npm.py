@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.core.errors import ConflictError, NotFoundError, UpstreamError
+from app.core.errors import ConflictError, InvalidOperationError, NotFoundError, UpstreamError
 from app.core.security import open_secret, seal_secret
 from app.models import Application, AppSource, DiscoveredHost, NpmConnection
 from app.repositories import (
@@ -168,6 +168,16 @@ class NpmService:
             for k, v in values.items()
             if (v is not None or k in nullable) and getattr(conn, k) != v
         }
+        # Het opgeslagen NPM-wachtwoord gaat enkel naar de URL waarvoor het ingevuld werd: wie
+        # URL, gebruiker of TLS-controle wijzigt, vult het opnieuw in (anders kan een org-beheerder
+        # het naar een eigen server laten sturen).
+        moved = {"base_url", "identity"} & changes.keys() or (
+            "verify_tls" in changes and changes["verify_tls"]["to"] is False
+        )
+        if moved and secret is None:
+            raise InvalidOperationError(
+                "Vul het NPM-wachtwoord opnieuw in als je de URL, de gebruiker of de TLS-controle wijzigt"
+            )
         for field, change in changes.items():
             setattr(conn, field, change["to"])
         if secret is not None:

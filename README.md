@@ -67,8 +67,9 @@ is aangemeld, komt meteen in de app), **fase 6** (app publiceren) en **fase 7**
 - OpenAPI-documentatie op `/api/docs`
 - Docker Compose, en een handleiding voor een Debian-container zonder Docker
 
-**Nog niet**: gedeelde kluizen (organisaties en collecties), bijlagen, Sends,
-tweestapsverificatie voor de kluis en master password wijzigen.
+**Nog niet**: gedeelde kluizen (organisaties en collecties), bijlagen in de
+Bitwarden-apps (bijlagen in notities bestaan wel), Sends, tweestapsverificatie
+voor de kluis en master password wijzigen.
 
 ## Snel starten met Docker Compose
 
@@ -79,7 +80,7 @@ curl http://localhost:8080/health
 ```
 
 Zet Nginx Proxy Manager voor poort 8080. De Authentik-kant staat in
-[docs/authentik.md](docs/authentik.md), de NPM-koppeling in [docs/npm.md](docs/npm.md). Zonder Docker: [docs/debian-ct.md](docs/debian-ct.md).
+[docs/authentik.md](docs/authentik.md), de NPM-koppeling in [docs/npm.md](docs/npm.md). Zonder Docker: [docs/debian-ct.md](docs/debian-ct.md). Back-up en terugzetten: [docs/backup.md](docs/backup.md).
 
 ## Structuur
 
@@ -98,17 +99,18 @@ backend/
   tests/            pytest tegen PostgreSQL + een nep-OIDC-provider over HTTP
 frontend/           React 19 + Vite + TanStack Query
 docker/             Dockerfiles, Compose, nginx, lokale Authentik met blueprint
-deploy/debian/      systemd-unit en nginx-site voor een Debian-container
+deploy/debian/      systemd-unit, nginx-site, update- en back-upscript voor een Debian-container
 e2e/                browsertest tegen echte Authentik, connectortest tegen echte NPM,
                     Bitwarden CLI tegen de kluis
-docs/               Authentik-koppeling, NPM-koppeling, Bitwarden-clients, Debian-installatie
+docs/               Authentik, NPM, automatische login, app publiceren, Bitwarden-clients,
+                    notities, Debian-installatie, back-up
 ```
 
 De ontwerpdocumenten (`00-kernbeslissingen.md` en verder) staan in de root.
 
 ## Ontwikkelen
 
-Backend (Python 3.11+ en een PostgreSQL-database):
+Backend (Python 3.13, zoals CI en de Docker-image, en een PostgreSQL-database):
 
 ```bash
 cd backend

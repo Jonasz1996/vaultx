@@ -1,8 +1,9 @@
 """Periodieke sync van alle actieve NPM-koppelingen, als achtergrondtaak in de API-proces.
 
-Draaien er meerdere VaultX-nodes, dan doet elke node dit. Dat is veilig: een
-advisory lock per koppeling serialiseert de syncs, en een koppeling die net
-gesynchroniseerd is, wordt overgeslagen.
+Draaien er meerdere VaultX-nodes, dan doet elke node dit. Elke node claimt een
+koppeling eerst met een atomaire UPDATE op last_sync_at; enkel de node die dat
+lukt, synct ze. Een advisory lock per koppeling serialiseert daarnaast handmatige
+en geplande syncs.
 """
 
 from __future__ import annotations
@@ -36,6 +37,11 @@ async def sync_due_connections(settings: Settings) -> int:
     for conn_id in due:
         async with get_sessionmaker()() as db:
             try:
+                repo = NpmConnectionRepository(db)
+                claimed = await repo.claim_due_sync(conn_id, cutoff, datetime.now(UTC))
+                await db.commit()
+                if not claimed:  # een andere node was sneller
+                    continue
                 await NpmService(db, settings).sync(conn_id, Actor.system("npm-sync"))
                 done += 1
             except VaultXError as exc:

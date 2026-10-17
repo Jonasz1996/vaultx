@@ -3,7 +3,10 @@
 [Unit]
 Description=VaultX backend (FastAPI)
 After=network-online.target postgresql.service
-Wants=network-online.target
+Wants=network-online.target postgresql.service
+# Faalt een migratie, dan niet eindeloos herstarten: na 5 pogingen in 2 minuten stopt systemd.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -17,6 +20,7 @@ Restart=on-failure
 RestartSec=3
 
 # Hardening
+UMask=0077
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

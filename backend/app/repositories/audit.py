@@ -7,6 +7,13 @@ from app.models import AuditLog
 from app.repositories.base import Repository
 
 
+def _same_chain(organization_id: UUID | None):
+    # Geen IS NOT DISTINCT FROM: daarvoor gebruikt PostgreSQL de index (organization_id, id) niet.
+    if organization_id is None:
+        return AuditLog.organization_id.is_(None)
+    return AuditLog.organization_id == organization_id
+
+
 class AuditRepository(Repository[AuditLog]):
     model = AuditLog
 
@@ -16,10 +23,7 @@ class AuditRepository(Repository[AuditLog]):
 
     async def last_hash(self, organization_id: UUID | None) -> str | None:
         return await self.db.scalar(
-            select(AuditLog.hash)
-            .where(AuditLog.organization_id.is_not_distinct_from(organization_id))
-            .order_by(AuditLog.id.desc())
-            .limit(1)
+            select(AuditLog.hash).where(_same_chain(organization_id)).order_by(AuditLog.id.desc()).limit(1)
         )
 
     async def search(
@@ -65,7 +69,7 @@ class AuditRepository(Repository[AuditLog]):
             await self.db.scalars(
                 select(AuditLog)
                 .where(
-                    AuditLog.organization_id.is_not_distinct_from(organization_id),
+                    _same_chain(organization_id),
                     AuditLog.id > after_id,
                 )
                 .order_by(AuditLog.id)

@@ -69,8 +69,9 @@ Bijlagen mogen standaard 25 MB per bestand zijn en samen 1 GB per gebruiker
 versleuteld in PostgreSQL. De meegeleverde nginx-configuratie laat voor
 `/api/v1/me/notes` uploads tot 30 MB toe (de rest van de API blijft op 1 MB);
 verhoog je de limiet, pas dan ook `client_max_body_size` daar aan. Werk je een
-bestaande installatie bij, kopieer dan ook de nieuwe nginx-configuratie (zie
-docs/debian-ct.md, stap 5), anders krijgen grote notities en bijlagen een 413.
+bestaande installatie bij, gebruik dan `deploy/debian/update.sh` (zie
+[debian-ct.md](debian-ct.md#updaten)): dat kopieert ook de nieuwe nginx-configuratie,
+anders krijgen grote notities en bijlagen een 413.
 
 ## Nog niet (latere fases)
 

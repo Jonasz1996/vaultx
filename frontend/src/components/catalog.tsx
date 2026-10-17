@@ -271,7 +271,7 @@ export function ConnectionForm({
           type="password"
           required={!editing}
           autoComplete="new-password"
-          placeholder={editing ? "Ongewijzigd laten" : ""}
+          placeholder={editing ? "Ongewijzigd laten (opnieuw invullen bij een andere URL of gebruiker)" : ""}
           value={secret}
           onChange={(e) => setSecret(e.target.value)}
         />

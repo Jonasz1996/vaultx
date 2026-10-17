@@ -273,7 +273,8 @@ function makeMarked(ctx: RenderContext): Marked {
       },
       link({ href, title, tokens }) {
         const text = this.parser.parseInline(tokens);
-        const external = /^https?:\/\//i.test(href);
+        // "//host" is protocol-relatief en dus extern, ook al begint het met een slash.
+        const external = /^(https?:)?\/\//i.test(href);
         if (!/^(https?:|mailto:|\/|#)/i.test(href)) return text;
         return `<a href="${esc(href)}"${title ? ` title="${esc(title)}"` : ""}${external ? ' target="_blank" rel="noopener noreferrer"' : ""}>${text}</a>`;
       },
@@ -296,13 +297,14 @@ function makeMarked(ctx: RenderContext): Marked {
         const c = /^<p>\[!([A-Za-z-]+)\]([+-]?)[ \t]*([^\n<]*)(?:\n|<\/p>\n?)/.exec(inner);
         if (!c) return `<blockquote>\n${inner}</blockquote>\n`;
         const type = c[1].toLowerCase();
-        const title = c[3].trim() || CALLOUTS[type] || c[1];
+        // c[3] komt uit HTML die marked al ontsnapt heeft: niet nog eens esc() (anders "Q&amp;A").
+        const title = c[3].trim() || esc(CALLOUTS[type] || c[1]);
         let rest = inner.slice(c[0].length);
         if (!c[0].endsWith("</p>") && !c[0].endsWith("</p>\n")) rest = `<p>${rest}`;
         rest = rest.replace(/^<p><\/p>\n?/, "");
         const tag = c[2] ? "details" : "div";
         const open = c[2] === "+" ? " open" : "";
-        const head = c[2] ? `<summary class="callout-title">${esc(title)}</summary>` : `<div class="callout-title">${esc(title)}</div>`;
+        const head = c[2] ? `<summary class="callout-title">${title}</summary>` : `<div class="callout-title">${title}</div>`;
         return `<${tag} class="callout callout-${calloutTone(type)}"${open}>${head}<div class="callout-body">${rest}</div></${tag}>\n`;
       },
     },
