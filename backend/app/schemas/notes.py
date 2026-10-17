@@ -25,7 +25,9 @@ class NoteContent(BaseModel):
 
 
 class NoteCreate(NoteContent):
-    pass
+    # De browser kiest het id zelf en versleutelt het mee in de inhoud: zo kan de server
+    # notities niet ongemerkt omwisselen. Leeg = de server kiest (oudere clients).
+    id: UUID | None = Field(None, description="Door de client gekozen id (UUID v4)")
 
 
 class NoteUpdate(NoteContent):
@@ -50,7 +52,7 @@ class NoteVersionOut(ORMModel):
 class NoteImport(BaseModel):
     """Meerdere notities in één keer, bv. een geïmporteerde Obsidian-kluis."""
 
-    notes: list[NoteContent] = Field(min_length=1, max_length=200)
+    notes: list[NoteCreate] = Field(min_length=1, max_length=200)
 
 
 class NoteFileOut(ORMModel):

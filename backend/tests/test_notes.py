@@ -263,3 +263,27 @@ async def test_files_removed_with_vault(make_client):
     assert (await c.delete_("/api/v1/me/vault")).status_code == 204
     await enroll(c, "jonas")
     assert (await c.get("/api/v1/me/notes/files")).json()["files"] == []
+
+
+async def test_client_chosen_note_id(make_client):
+    # De browser kiest het id en versleutelt het mee, zodat de server notities niet kan omwisselen.
+    import uuid
+
+    a = await make_client()
+    acc = await enroll(a, "jonas")
+    nid = str(uuid.uuid4())
+    r = await a.post_json("/api/v1/me/notes", {**note(acc, "Eén", "x"), "id": nid})
+    assert r.status_code == 201, r.text
+    assert r.json()["id"] == nid
+    r = await a.post_json("/api/v1/me/notes", {**note(acc, "Twee", "y"), "id": nid})
+    assert r.status_code == 409
+    # Ook een ander account kan dat id niet hergebruiken.
+    b = await make_client()
+    acc_b = await enroll(b, "bob")
+    r = await b.post_json("/api/v1/me/notes", {**note(acc_b, "Bob", "z"), "id": nid})
+    assert r.status_code == 409
+    other = str(uuid.uuid4())
+    r = await a.post_json("/api/v1/me/notes/import", {"notes": [{**note(acc, "Imp", "i"), "id": other}]})
+    assert r.status_code in (200, 201), r.text
+    assert [n["id"] for n in r.json()] == [other]
+    assert len((await a.get("/api/v1/me/notes")).json()) == 2

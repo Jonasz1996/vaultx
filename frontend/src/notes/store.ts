@@ -16,13 +16,25 @@ export interface NoteVersion extends NoteDoc {
   saved_at: string;
 }
 
+/**
+ * Ontsleutelt een notitie en controleert dat ze bij dit id hoort. Het id zit mee in de
+ * versleutelde inhoud, dus de server kan de inhoud van twee notities niet ongemerkt
+ * omwisselen. Oudere notities zonder id krijgen het bij de volgende keer bewaren.
+ */
+async function openDoc(content: string, id: string, key: UserKey): Promise<NoteDoc> {
+  const json = await decryptText(content, key);
+  const bound = (JSON.parse(json) as { id?: unknown }).id;
+  if (bound !== undefined && bound !== id) throw new Error("Deze inhoud hoort bij een andere notitie");
+  return parseDoc(json);
+}
+
 async function open(e: EncryptedNote, key: UserKey): Promise<Note> {
-  const doc = parseDoc(await decryptText(e.content, key));
+  const doc = await openDoc(e.content, e.id, key);
   return { ...doc, id: e.id, revision: e.revision, created_at: e.created_at, updated_at: e.updated_at, deleted_at: e.deleted_at };
 }
 
-async function seal(doc: NoteDoc, key: UserKey): Promise<string> {
-  return encryptText(JSON.stringify(docOf(doc)), key);
+async function seal(doc: NoteDoc, id: string, key: UserKey): Promise<string> {
+  return encryptText(JSON.stringify({ ...docOf(doc), id }), key);
 }
 
 export function useNotesStore(key: UserKey) {
@@ -77,7 +89,8 @@ export function useNotesStore(key: UserKey) {
 
   const create = useCallback(
     async (doc: NoteDoc): Promise<Note> => {
-      const n = await open(await api.post<EncryptedNote>(BASE, { content: await seal(doc, key) }), key);
+      const id = crypto.randomUUID();
+      const n = await open(await api.post<EncryptedNote>(BASE, { id, content: await seal(doc, id, key) }), key);
       put([n]);
       return n;
     },
@@ -91,7 +104,7 @@ export function useNotesStore(key: UserKey) {
         if (!current) throw new Error("Notitie niet gevonden");
         try {
           const res = await fetchPut(`${BASE}/${id}`, {
-            content: await seal(doc, key),
+            content: await seal(doc, id, key),
             base_revision: baseRevision ?? current.revision,
           });
           const n = await open(res, key);
@@ -123,7 +136,7 @@ export function useNotesStore(key: UserKey) {
           const next = change(docOf(current));
           if (JSON.stringify(docOf(next)) === JSON.stringify(docOf(current))) return false;
           try {
-            put([await open(await fetchPut(`${BASE}/${id}`, { content: await seal(next, key), base_revision: current.revision }), key)]);
+            put([await open(await fetchPut(`${BASE}/${id}`, { content: await seal(next, id, key), base_revision: current.revision }), key)]);
             return true;
           } catch (e) {
             if (!(e instanceof ConflictError)) throw e;
@@ -156,7 +169,12 @@ export function useNotesStore(key: UserKey) {
   const importMany = useCallback(
     async (docs: NoteDoc[], onProgress?: (done: number) => void): Promise<Note[]> => {
       const created: Note[] = [];
-      const sealed = await Promise.all(docs.map(async (d) => ({ content: await seal(d, key) })));
+      const sealed = await Promise.all(
+        docs.map(async (d) => {
+          const id = crypto.randomUUID();
+          return { id, content: await seal(d, id, key) };
+        }),
+      );
       // Per verzoek hoogstens 100 notities en ongeveer 8 MB, ruim onder de limiet van nginx.
       for (let i = 0; i < sealed.length; ) {
         const chunk = [sealed[i++]];
@@ -180,7 +198,7 @@ export function useNotesStore(key: UserKey) {
     async (id: string): Promise<NoteVersion[]> => {
       const list = await api.get<EncryptedNoteVersion[]>(`${BASE}/${id}/versions`);
       return Promise.all(
-        list.map(async (v) => ({ ...parseDoc(await decryptText(v.content, key)), revision: v.revision, saved_at: v.saved_at })),
+        list.map(async (v) => ({ ...(await openDoc(v.content, id, key)), revision: v.revision, saved_at: v.saved_at })),
       );
     },
     [key],
