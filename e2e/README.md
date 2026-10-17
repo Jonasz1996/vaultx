@@ -39,3 +39,23 @@ cd backend && python ../e2e/npm_e2e.py http://localhost:81 admin@example.com een
 # Enkel demo-hosts zetten (bv. om de UI te bekijken), zonder controle:
 python ../e2e/npm_e2e.py http://localhost:81 admin@example.com een-lang-wachtwoord --seed-only
 ```
+
+# End-to-end test met de officiële Bitwarden CLI
+
+`bitwarden_e2e.py` start zelf een nep-Authentik (OIDC) en de VaultX-backend met
+een zelfondertekend TLS-certificaat (de clients weigeren `http://`). Het
+activeert een kluis met exact de browsercode van de webinterface
+(`frontend/src/vault/crypto.ts`, via Node) en doet daarna met `bw`: login, sync,
+map en items aanmaken, wijzigen, lock/unlock, prullenbak, terugzetten en
+definitief verwijderen. Tot slot wordt de gebruiker gedeactiveerd en moeten
+sync en login falen. CI draait dit met CLI 2026.9.1.
+
+```bash
+npm install -g @bitwarden/cli@2026.9.1          # of BW=/pad/naar/bw
+cd backend
+VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
+  python ../e2e/bitwarden_e2e.py
+# E2E_SERVER_LOG=info toont elke request; handig om te zien welke endpoints een nieuwe client verwacht.
+```
+
+Vereist Node 22 of nieuwer en een lege database.

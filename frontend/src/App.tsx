@@ -17,6 +17,7 @@ import { TeamDetailPage } from "./pages/TeamDetail";
 import { TeamsPage } from "./pages/Teams";
 import { UserDetailPage } from "./pages/UserDetail";
 import { UsersPage } from "./pages/Users";
+import { VaultPage } from "./pages/Vault";
 
 /** Laat enkel ingelogde gebruikers door; anders naar de loginpagina. */
 function RequireAuth() {
@@ -48,6 +49,7 @@ export const router = createBrowserRouter([
         element: <Layout />,
         children: [
           { index: true, element: <DashboardPage /> },
+          { path: "vault", element: <VaultPage /> },
           { path: "users", element: <UsersPage /> },
           { path: "users/:userId", element: <UserDetailPage /> },
           { path: "organizations", element: <OrganizationsPage /> },

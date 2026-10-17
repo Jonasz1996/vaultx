@@ -2,8 +2,17 @@
 
 Self-hosted wachtwoord- en secretsplatform met Authentik als identiteitsbron
 en Nginx Proxy Manager-integratie. Deze repository bevat **phase-0** (de
-fundering) en **fase 1** (NPM-connector en applicatiecatalogus), nog zonder
-kluisfunctionaliteit.
+fundering), **fase 1** (NPM-connector en applicatiecatalogus) en **fase 2**
+(een persoonlijke kluis voor de officiële Bitwarden®-clients).
+
+**Fase 2**
+
+- Persoonlijke kluis per VaultX-gebruiker, te gebruiken met de officiële Bitwarden-apps, -extensies en -CLI
+- Activeren in VaultX zelf (na Authentik-login); de browser leidt de sleutels af, de server ziet nooit het master password
+- Login, sync, items (alle types) en mappen; prullenbak; apparaten afmelden
+- Wie in VaultX gedeactiveerd wordt, verliest meteen de toegang tot zijn kluis op alle apparaten
+- Getest met Bitwarden CLI 2026.9.1 (ook in CI). Zie [docs/bitwarden.md](docs/bitwarden.md)
+- VaultX is niet verbonden met Bitwarden, Inc.
 
 **Fase 1**
 
@@ -23,8 +32,8 @@ kluisfunctionaliteit.
 - OpenAPI-documentatie op `/api/docs`
 - Docker Compose, en een handleiding voor een Debian-container zonder Docker
 
-**Nog niet**: kluis, encryptie, Bitwarden-compatibiliteit, bijlagen, en
-schrijven naar NPM.
+**Nog niet**: gedeelde kluizen (organisaties en collecties), bijlagen, Sends,
+tweestapsverificatie voor de kluis, master password wijzigen, en schrijven naar NPM.
 
 ## Snel starten met Docker Compose
 
@@ -42,7 +51,8 @@ Zet Nginx Proxy Manager voor poort 8080. De Authentik-kant staat in
 ```
 backend/
   app/
-    api/            routers: health, auth (OIDC), v1 (me, users, organizations, audit, catalog, npm)
+    api/            routers: health, auth (OIDC), v1 (me, vault, users, organizations, audit, catalog, npm),
+                    bitwarden (/identity en /api voor Bitwarden-clients)
     core/           config, database, fouten, request-context
     models/         SQLAlchemy 2-modellen
     repositories/   data-toegang, geen businessregels
@@ -54,8 +64,9 @@ backend/
 frontend/           React 19 + Vite + TanStack Query
 docker/             Dockerfiles, Compose, nginx, lokale Authentik met blueprint
 deploy/debian/      systemd-unit en nginx-site voor een Debian-container
-e2e/                browsertest tegen echte Authentik, connectortest tegen echte NPM
-docs/               Authentik-koppeling, NPM-koppeling, Debian-installatie
+e2e/                browsertest tegen echte Authentik, connectortest tegen echte NPM,
+                    Bitwarden CLI tegen de kluis
+docs/               Authentik-koppeling, NPM-koppeling, Bitwarden-clients, Debian-installatie
 ```
 
 De ontwerpdocumenten (`00-kernbeslissingen.md` en verder) staan in de root.

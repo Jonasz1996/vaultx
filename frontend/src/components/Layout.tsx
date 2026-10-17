@@ -5,6 +5,7 @@ import { userLabel } from "../format";
 
 const nav = [
   { to: "/", label: "Dashboard", end: true },
+  { to: "/vault", label: "Mijn kluis" },
   { to: "/users", label: "Gebruikers", adminOnly: true },
   { to: "/organizations", label: "Organisaties" },
   { to: "/teams", label: "Teams" },
