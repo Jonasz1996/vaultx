@@ -10,7 +10,7 @@ from app.api.bitwarden.deps import BitwardenRoute, vault_enabled
 from app.api.deps import DbSession, MetaDep, SettingsDep
 from app.core.errors import InvalidOperationError
 from app.schemas.bitwarden import PreloginIn, prelogin_json, token_json
-from app.services.vault_auth import IdentityError, VaultAuthService
+from app.services.vault_auth import IdentityError, TwoFactorInput, VaultAuthService
 
 router = APIRouter(
     prefix="/identity",
@@ -57,8 +57,14 @@ async def token(request: Request, db: DbSession, settings: SettingsDep, meta: Me
         )
     if client_id not in KNOWN_CLIENTS:
         raise IdentityError("invalid_client", "Onbekende client")
-    if _form_value(form, "twoFactorToken", "twoFactorProvider"):
-        raise IdentityError("invalid_request", "Tweestapsverificatie wordt nog niet ondersteund")
+    two_factor = None
+    if token_2fa := _form_value(form, "twoFactorToken"):
+        try:
+            provider: int | None = int(_form_value(form, "twoFactorProvider"))
+        except ValueError:
+            provider = None
+        remember = _form_value(form, "twoFactorRemember") in ("1", "true", "True")
+        two_factor = TwoFactorInput(provider, token_2fa[:256], remember)
     username = _form_value(form, "username")
     password = _form_value(form, "password")
     identifier = _form_value(form, "deviceIdentifier", "device_identifier")
@@ -77,6 +83,7 @@ async def token(request: Request, db: DbSession, settings: SettingsDep, meta: Me
         device_name=device_name[:255],
         device_type=device_type,
         meta=meta,
+        two_factor=two_factor,
     )
     return token_json(grant)
 

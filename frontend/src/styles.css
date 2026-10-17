@@ -483,3 +483,19 @@ details.callout summary { color: inherit; }
 .input-row input { flex: 1; min-width: 0; }
 .actions-inline { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; flex-basis: 100%; word-break: normal; }
 .page-header .actions { flex-shrink: 0; }
+
+/* Tweestapsverificatie (fase 9) */
+.qr {
+  width: 200px;
+  height: 200px;
+  image-rendering: pixelated;
+  border-radius: 6px;
+  background: #fff;
+}
+.recovery-code {
+  display: inline-block;
+  font-size: 1.1rem;
+  letter-spacing: 0.05em;
+  padding: 0.4rem 0.6rem;
+  user-select: all;
+}

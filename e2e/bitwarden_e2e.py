@@ -362,6 +362,25 @@ def main() -> None:
         assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-1"
         PASSWORD_NOW[0] = new_password
 
+        step("Fase 9: tweestapsverificatie aanzetten, daarna inloggen met bw --method 0 --code")
+        from app.services import totp
+
+        params = {**params, "kdf": 1, "iterations": 3, "memory": 64, "parallelism": 4}
+        now_hash = node_json("vault_password.mts", "derive", {"params": params, "password": new_password})
+        r = user.post("/api/v1/me/vault/2fa/setup", json={"master_password_hash": now_hash["loginHash"]}, headers=csrf)
+        assert r.status_code == 200, r.text
+        secret = r.json()["secret"]
+        r = user.post("/api/v1/me/vault/2fa/enable", json={"code": totp.code_at(secret)}, headers=csrf)
+        assert r.status_code == 200, r.text
+        bw.run("logout", check=False)
+        bw.session = None
+        no_code = bw.run("login", email, new_password, "--raw", check=False)
+        assert no_code.returncode != 0, "login zonder code lukte"
+        code = totp.code_at(secret, time.time() + 30)
+        bw.session = bw.run("login", email, new_password, "--method", "0", "--code", code, "--raw").stdout.strip()
+        assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-1"
+        assert user.get("/api/v1/me/vault").json()["two_factor_enabled"] is True
+
         step("Gebruiker deactiveren in VaultX: de kluis gaat dicht op alle apparaten")
         admin = httpx.Client(base_url=base, verify=cert)
         login(admin, fake, "admin-e2e", "admin-e2e@example.com", ["vaultx-admins"])
@@ -373,7 +392,9 @@ def main() -> None:
         assert bw.run("sync", "--force", check=False).returncode != 0, "sync lukte na deactiveren"
         bw.run("logout", check=False)
         bw.session = None
-        again = bw.run("login", email, PASSWORD_NOW[0], "--raw", check=False)
+        again = bw.run(
+            "login", email, PASSWORD_NOW[0], "--method", "0", "--code", totp.code_at(secret), "--raw", check=False
+        )
         assert again.returncode != 0, "login lukte na deactiveren"
         print((again.stdout + again.stderr).strip().splitlines()[-1])
 

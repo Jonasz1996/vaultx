@@ -132,6 +132,9 @@ class VaultStatusOut(BaseModel):
     trash_count: int = 0
     folder_count: int = 0
     note_count: int = 0
+    # Tweestapsverificatie voor de Bitwarden-apps (fase 9)
+    two_factor_enabled: bool = False
+    two_factor_enabled_at: datetime | None = None
     devices: list[VaultDeviceOut] = []
 
 
@@ -191,3 +194,30 @@ class VaultPasswordChange(BaseModel):
             self.kdf, self.kdf_iterations, self.kdf_memory, self.kdf_parallelism
         )
         return self
+
+
+class TwoFactorSetup(BaseModel):
+    """Stap 1: master password bewijzen; VaultX maakt een nieuw TOTP-geheim aan."""
+
+    master_password_hash: str = Field(max_length=128)
+
+
+class TwoFactorSetupOut(BaseModel):
+    secret: str
+    otpauth_uri: str
+
+
+class TwoFactorEnable(BaseModel):
+    """Stap 2: een code uit de authenticator-app bewijst dat het geheim goed is overgenomen."""
+
+    code: str = Field(min_length=6, max_length=16)
+
+
+class TwoFactorEnableOut(BaseModel):
+    # Eenmalig getoond: hiermee kom je binnen als je telefoon weg is.
+    recovery_code: str
+
+
+class TwoFactorDisable(BaseModel):
+    master_password_hash: str = Field(max_length=128)
+    code: str = Field(min_length=6, max_length=64, description="Code uit de app of de herstelcode")

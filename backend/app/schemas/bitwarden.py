@@ -218,6 +218,8 @@ def token_json(grant: TokenGrant) -> dict[str, Any]:
     }
     if grant.refresh_token:
         out["refresh_token"] = grant.refresh_token
+    if grant.two_factor_token:
+        out["TwoFactorToken"] = grant.two_factor_token
     return out
 
 
@@ -242,7 +244,7 @@ def profile_json(user: User, account: VaultAccount) -> dict[str, Any]:
         "premium": True,
         "premiumFromOrganization": False,
         "culture": "en-US",
-        "twoFactorEnabled": False,
+        "twoFactorEnabled": account.two_factor_enabled,
         "key": account.user_key,
         "privateKey": account.private_key,
         "accountKeys": account_keys_json(account),

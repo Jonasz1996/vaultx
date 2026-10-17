@@ -11,10 +11,12 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -76,8 +78,21 @@ class VaultAccount(TimestampMixin, Base):
     # Bescherming tegen wachtwoord raden via het token-endpoint.
     failed_logins: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Tweestapsverificatie (fase 9): TOTP-geheim, versleuteld met de serversleutel
+    # (seal_secret, context "vault-totp:<user_id>"). totp_pending tijdens het instellen.
+    totp_secret: Mapped[bytes | None] = mapped_column(LargeBinary)
+    totp_pending: Mapped[bytes | None] = mapped_column(LargeBinary)
+    # Laatst gebruikte tijdstap: dezelfde code werkt geen tweede keer.
+    totp_last_step: Mapped[int | None] = mapped_column(BigInteger)
+    # SHA-256 van de herstelcode (160 bits willekeur, dus geen trage hash nodig).
+    recovery_code_hash: Mapped[str | None] = mapped_column(String(64))
+    two_factor_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     user = relationship("User")
+
+    @property
+    def two_factor_enabled(self) -> bool:
+        return self.totp_secret is not None
 
 
 class VaultDevice(Base):
@@ -100,6 +115,9 @@ class VaultDevice(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # "Onthoud mij" bij tweestapsverificatie: SHA-256 van het token dat de client bewaart.
+    remember_token_hash: Mapped[str | None] = mapped_column(String(64))
+    remember_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class VaultFolder(Base):

@@ -116,3 +116,115 @@ async def test_change_master_password_to_argon2id(make_client):
     got = (await c.get(f"/api/ciphers/{item['id']}", headers=h2)).json()
     assert account.dec(got["login"]["password"]) == "pw"
     assert new_pw != PASSWORD
+
+
+async def _enable_2fa(c, account) -> tuple[str, str]:
+    from app.services import totp
+
+    r = await c.post_json("/api/v1/me/vault/2fa/setup", {"master_password_hash": account.password_hash})
+    assert r.status_code == 200, r.text
+    secret = r.json()["secret"]
+    assert r.json()["otpauth_uri"].startswith("otpauth://totp/VaultX%3A")
+    assert (await c.post_json("/api/v1/me/vault/2fa/enable", {"code": "000000"})).status_code == 422
+    r = await c.post_json("/api/v1/me/vault/2fa/enable", {"code": totp.code_at(secret)})
+    assert r.status_code == 200, r.text
+    return secret, r.json()["recovery_code"]
+
+
+async def test_two_step_login_with_authenticator(make_client):
+    import time
+
+    from app.services import totp
+    from tests.test_vault import token
+
+    c = await make_client()
+    account = await enroll(c, "jonas")
+    secret, recovery = await _enable_2fa(c, account)
+    assert (await c.get("/api/v1/me/vault")).json()["two_factor_enabled"] is True
+
+    # Zonder code: de client krijgt de vraag om een tweede stap, in het formaat van Bitwarden
+    r = await token(c, account.email, account.password_hash)
+    assert r.status_code == 400
+    body = r.json()
+    assert body["TwoFactorProviders2"] == {"0": None} and body["TwoFactorProviders"] == [0]
+    assert "access_token" not in body
+
+    # Foute code
+    r = await token(c, account.email, account.password_hash, twoFactorToken="123456", twoFactorProvider="0")
+    assert r.status_code == 400 and "TwoFactorProviders2" not in r.json()
+
+    # De code van de vorige stap (de enable-code is al verbruikt), dus de volgende stap nemen
+    code = totp.code_at(secret, time.time() + 30)
+    r = await token(
+        c,
+        account.email,
+        account.password_hash,
+        twoFactorToken=code,
+        twoFactorProvider="0",
+        twoFactorRemember="1",
+    )
+    assert r.status_code == 200, r.text
+    remember = r.json()["TwoFactorToken"]
+    h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    assert (await c.get("/api/sync", headers=h)).json()["profile"]["twoFactorEnabled"] is True
+
+    # Dezelfde code werkt geen tweede keer
+    r = await token(
+        c, account.email, account.password_hash, "dev-2", twoFactorToken=code, twoFactorProvider="0"
+    )
+    assert r.status_code == 400
+
+    # Onthouden apparaat: geen code nodig, maar enkel op dat apparaat
+    r = await token(c, account.email, account.password_hash, twoFactorToken=remember, twoFactorProvider="5")
+    assert r.status_code == 200, r.text
+    r = await token(
+        c, account.email, account.password_hash, "dev-3", twoFactorToken=remember, twoFactorProvider="5"
+    )
+    assert r.status_code == 400 and "TwoFactorProviders2" in r.json()
+
+    # Uitzetten vraagt master password en een code (hier de herstelcode)
+    bad = {"master_password_hash": account.password_hash, "code": "AAAA-BBBB"}
+    assert (await c.post_json("/api/v1/me/vault/2fa/disable", bad)).status_code == 422
+    ok = {"master_password_hash": account.password_hash, "code": recovery.lower()}
+    assert (await c.post_json("/api/v1/me/vault/2fa/disable", ok)).status_code == 204
+    assert (await token(c, account.email, account.password_hash, "dev-4")).status_code == 200
+
+
+async def test_recovery_code_at_login_and_admin_reset(make_client, admin):
+    from tests.test_vault import token
+
+    c = await make_client()
+    account = await enroll(c, "jonas")
+    _, recovery = await _enable_2fa(c, account)
+    r = await token(c, account.email, account.password_hash, twoFactorToken=recovery, twoFactorProvider="8")
+    assert r.status_code == 200, r.text
+    assert (await c.get("/api/v1/me/vault")).json()["two_factor_enabled"] is False
+
+    await _enable_2fa(c, account)
+    me = (await c.get("/api/v1/me")).json()
+    other = await make_client()
+    await other.login("eve")
+    assert (
+        await other.delete(f"/api/v1/users/{me['id']}/vault-2fa", headers=other.mutating_headers())
+    ).status_code == 403
+    r = await admin.delete(f"/api/v1/users/{me['id']}/vault-2fa", headers=admin.mutating_headers())
+    assert r.status_code == 204, r.text
+    assert (await token(c, account.email, account.password_hash, "dev-9")).status_code == 200
+    audit = (await admin.get("/api/v1/audit", params={"action": "vault.2fa."})).json()["items"]
+    assert [a["action"] for a in audit].count("vault.2fa.enable") == 2
+
+
+async def test_cli_resets_vault_two_factor(make_client):
+    import pytest
+
+    from app import cli
+    from app.core.errors import VaultXError
+    from tests.test_vault import token
+
+    c = await make_client()
+    account = await enroll(c, "jonas")
+    await _enable_2fa(c, account)
+    assert await cli.reset_vault_two_factor("JONAS@example.com") == "jonas@example.com"
+    assert (await token(c, account.email, account.password_hash)).status_code == 200
+    with pytest.raises(VaultXError):
+        await cli.reset_vault_two_factor("jonas@example.com")

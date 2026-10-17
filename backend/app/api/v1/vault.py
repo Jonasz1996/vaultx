@@ -5,6 +5,11 @@ from fastapi import APIRouter, Response, status
 from app.api.deps import CurrentPrincipal, DbSession, SettingsDep
 from app.core.errors import NotFoundError
 from app.schemas.vault import (
+    TwoFactorDisable,
+    TwoFactorEnable,
+    TwoFactorEnableOut,
+    TwoFactorSetup,
+    TwoFactorSetupOut,
     VaultDeviceOut,
     VaultEnroll,
     VaultPasswordChange,
@@ -43,6 +48,8 @@ async def _status(p: CurrentPrincipal, db: DbSession, settings: SettingsDep) -> 
         trash_count=st.trash_count,
         folder_count=st.folder_count,
         note_count=st.note_count,
+        two_factor_enabled=bool(a and a.two_factor_enabled),
+        two_factor_enabled_at=a.two_factor_enabled_at if a else None,
         devices=[_device_out(d) for d in st.devices],
     )
 
@@ -93,6 +100,41 @@ async def change_password(
         raise NotFoundError("De kluis is uitgeschakeld op deze server")
     await VaultService(db).change_password(p, body, settings)
     return await _status(p, db, settings)
+
+
+@router.post(
+    "/2fa/setup",
+    response_model=TwoFactorSetupOut,
+    summary="Tweestapsverificatie instellen: nieuw TOTP-geheim (na controle master password)",
+)
+async def two_factor_setup(
+    body: TwoFactorSetup, p: CurrentPrincipal, db: DbSession, settings: SettingsDep
+) -> TwoFactorSetupOut:
+    secret, uri = await VaultService(db).setup_two_factor(p, body.master_password_hash, settings)
+    return TwoFactorSetupOut(secret=secret, otpauth_uri=uri)
+
+
+@router.post(
+    "/2fa/enable",
+    response_model=TwoFactorEnableOut,
+    summary="Tweestapsverificatie aanzetten met een eerste code; geeft de herstelcode",
+)
+async def two_factor_enable(
+    body: TwoFactorEnable, p: CurrentPrincipal, db: DbSession, settings: SettingsDep
+) -> TwoFactorEnableOut:
+    return TwoFactorEnableOut(recovery_code=await VaultService(db).enable_two_factor(p, body.code, settings))
+
+
+@router.post(
+    "/2fa/disable",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Tweestapsverificatie uitzetten (master password + code of herstelcode)",
+)
+async def two_factor_disable(
+    body: TwoFactorDisable, p: CurrentPrincipal, db: DbSession, settings: SettingsDep
+) -> Response:
+    await VaultService(db).disable_two_factor(p, body.master_password_hash, body.code, settings)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT, summary="Kluis met alle items verwijderen")

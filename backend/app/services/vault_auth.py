@@ -14,6 +14,7 @@ Flow (zoals de officiële clients het doen):
 
 from __future__ import annotations
 
+import hmac
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -32,14 +33,34 @@ from app.core.security import (
     dummy_master_password_hash,
     hash_token,
     new_token,
+    open_secret,
     verify_master_password,
 )
 from app.models import User, VaultAccount, VaultDevice
 from app.repositories import UserRepository, VaultAccountRepository, VaultDeviceRepository
+from app.services import totp
 from app.services.audit import AuditService
 from app.services.principal import Actor
 
 DEFAULT_KDF_ITERATIONS = 600_000
+# "Onthoud mij" bij tweestapsverificatie: zo lang vraagt een apparaat geen code meer.
+REMEMBER_DAYS = 30
+
+
+def totp_context(user_id: UUID) -> str:
+    return f"vault-totp:{user_id}"
+
+
+def clear_two_factor(account: VaultAccount) -> None:
+    """Zet tweestapsverificatie uit. Onthouden apparaten vervallen vanzelf: zonder
+    geheim wordt er niet meer om een tweede stap gevraagd, en bij opnieuw aanzetten
+    worden alle onthoud-tokens gewist (zie VaultService.enable_two_factor)."""
+    account.totp_secret = None
+    account.totp_pending = None
+    account.totp_last_step = None
+    account.recovery_code_hash = None
+    account.two_factor_enabled_at = None
+
 
 # Bitwarden DeviceType, voor leesbare apparaatnamen in de UI en de auditlog.
 DEVICE_TYPES = {
@@ -80,11 +101,44 @@ def device_type_name(device_type: int) -> str:
 class IdentityError(Exception):
     """Fout in /identity: wordt als OAuth-fout (400) met Bitwarden-ErrorModel teruggegeven."""
 
-    def __init__(self, error: str, message: str, description: str | None = None) -> None:
+    def __init__(
+        self, error: str, message: str, description: str | None = None, extra: dict | None = None
+    ) -> None:
         super().__init__(message)
         self.error = error
         self.message = message
         self.description = description or error
+        # Extra velden in het antwoord, bv. TwoFactorProviders2 als een tweede stap nodig is.
+        self.extra = extra or {}
+
+
+class TwoFactorProvider:
+    """Bitwarden TwoFactorProviderType (enkel wat VaultX ondersteunt)."""
+
+    AUTHENTICATOR = 0
+    REMEMBER = 5
+    RECOVERY_CODE = 8
+
+
+@dataclass(slots=True)
+class TwoFactorInput:
+    provider: int | None
+    token: str
+    remember: bool
+
+
+def two_factor_required(account: VaultAccount) -> IdentityError:
+    return IdentityError(
+        "invalid_grant",
+        "Tweestapsverificatie is vereist.",
+        "Two factor required.",
+        extra={
+            "TwoFactorProviders": [TwoFactorProvider.AUTHENTICATOR],
+            "TwoFactorProviders2": {str(TwoFactorProvider.AUTHENTICATOR): None},
+            "MasterPasswordPolicy": {"Object": "masterPasswordPolicy"},
+            "Email": account.email,
+        },
+    )
 
 
 class VaultAuthError(Exception):
@@ -106,6 +160,8 @@ class TokenGrant:
     expires_in: int
     refresh_token: str | None
     account: VaultAccount
+    # "Onthoud dit apparaat" na tweestapsverificatie; de client stuurt het later terug.
+    two_factor_token: str | None = None
 
 
 @dataclass(slots=True)
@@ -217,6 +273,7 @@ class VaultAuthService:
         device_name: str,
         device_type: int,
         meta: RequestMeta,
+        two_factor: TwoFactorInput | None = None,
     ) -> TokenGrant:
         email = normalize_email(username)
         account = await self.accounts.by_email(email)
@@ -291,10 +348,17 @@ class VaultAuthService:
             await self.db.commit()
             raise IdentityError("invalid_grant", "Je VaultX-account is gedeactiveerd.", "user_disabled")
 
+        device = await self.devices.by_identifier(account.user_id, device_identifier)
+        remember_token: str | None = None
+        two_factor_method: str | None = None
+        if account.two_factor_enabled:
+            two_factor_method, remember_token = await self._second_step(
+                account, actor, device, two_factor, device_type, now
+            )
+
         account.failed_logins = 0
         account.locked_until = None
         refresh_token = new_token()
-        device = await self.devices.by_identifier(account.user_id, device_identifier)
         if device is None:
             device = self.devices.add(
                 VaultDevice(
@@ -314,6 +378,9 @@ class VaultAuthService:
             device.refresh_token_hash = hash_token(refresh_token)
             device.last_seen_at = now
             device.revoked_at = None
+        if remember_token is not None:
+            device.remember_token_hash = hash_token(remember_token)
+            device.remember_until = now + timedelta(days=REMEMBER_DAYS)
         await self.db.flush()
         await self.audit.record(
             "vault.login",
@@ -324,11 +391,84 @@ class VaultAuthService:
                 "client": device_type_name(device_type),
                 "device": device_name,
                 "device_id": str(device.id),
+                **({"two_factor": two_factor_method} if two_factor_method else {}),
             },
         )
         await self.db.commit()
         access_token, expires_in = self.tokens.issue(user, account, device, client_id)
-        return TokenGrant(access_token, expires_in, refresh_token, account)
+        return TokenGrant(access_token, expires_in, refresh_token, account, remember_token)
+
+    async def _second_step(
+        self,
+        account: VaultAccount,
+        actor: Actor,
+        device: VaultDevice | None,
+        two_factor: TwoFactorInput | None,
+        device_type: int,
+        now: datetime,
+    ) -> tuple[str, str | None]:
+        """Tweede stap na een juist master password. Geeft (methode, nieuw onthoud-token) terug,
+        of gooit IdentityError: zonder code de vraag om een code, met een foute code een fout
+        die meetelt voor de vergrendeling (net als een fout master password)."""
+        if two_factor is None or not two_factor.token:
+            raise two_factor_required(account)
+        if two_factor.provider == TwoFactorProvider.REMEMBER:
+            if (
+                device is not None
+                and device.remember_token_hash is not None
+                and device.remember_until is not None
+                and device.remember_until > now
+                and hmac.compare_digest(device.remember_token_hash, hash_token(two_factor.token))
+            ):
+                return "onthouden apparaat", None
+            # Verlopen of onbekend: gewoon opnieuw om een code vragen (zoals Bitwarden).
+            raise two_factor_required(account)
+
+        method: str | None = None
+        if two_factor.provider == TwoFactorProvider.AUTHENTICATOR and account.totp_secret is not None:
+            secret = open_secret(
+                self.settings.secret_key.get_secret_value(),
+                account.totp_secret,
+                totp_context(account.user_id),
+            )
+            step = totp.verify(secret, two_factor.token, account.totp_last_step)
+            if step is not None:
+                account.totp_last_step = step
+                method = "authenticator"
+        elif two_factor.provider == TwoFactorProvider.RECOVERY_CODE and account.recovery_code_hash:
+            given = hash_token(totp.normalize_recovery_code(two_factor.token))
+            if hmac.compare_digest(given, account.recovery_code_hash):
+                # Zoals bij Bitwarden: de herstelcode zet tweestapsverificatie uit.
+                clear_two_factor(account)
+                await self.audit.record(
+                    "vault.2fa.disable",
+                    actor,
+                    target_type="vault",
+                    target_id=account.user_id,
+                    details={"reason": "herstelcode gebruikt", "client": device_type_name(device_type)},
+                )
+                method = "herstelcode"
+        if method is None:
+            account.failed_logins += 1
+            details = {"reason": "foute code (tweestapsverificatie)", "client": device_type_name(device_type)}
+            if account.failed_logins >= self.settings.vault_max_failed_logins:
+                account.locked_until = now + timedelta(minutes=self.settings.vault_lockout_minutes)
+                account.failed_logins = 0
+                details["locked_until"] = account.locked_until.isoformat()
+            await self.audit.record(
+                "vault.login",
+                actor,
+                outcome="failure",
+                target_type="vault",
+                target_id=account.user_id,
+                details=details,
+            )
+            await self.db.commit()
+            raise IdentityError(
+                "invalid_grant", "De code is ongeldig. Probeer opnieuw.", "invalid_two_factor"
+            )
+        new_remember = new_token() if two_factor.remember and account.two_factor_enabled else None
+        return method, new_remember
 
     async def refresh_grant(self, refresh_token: str, client_id: str) -> TokenGrant:
         invalid = IdentityError("invalid_grant", "Je sessie is verlopen. Log opnieuw in.", "invalid_grant")

@@ -9,6 +9,7 @@ e-mailadres van iemand anders.
 
 from __future__ import annotations
 
+import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -20,7 +21,13 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings
 from app.core.errors import ConflictError, InvalidOperationError, NotFoundError, PermissionDeniedError
-from app.core.security import hash_master_password, verify_master_password
+from app.core.security import (
+    hash_master_password,
+    hash_token,
+    open_secret,
+    seal_secret,
+    verify_master_password,
+)
 from app.models import VaultAccount, VaultCipher, VaultDevice, VaultFolder
 from app.models.base import new_uuid
 from app.repositories import (
@@ -31,9 +38,16 @@ from app.repositories import (
     VaultNoteRepository,
 )
 from app.schemas.vault import VaultEnroll, VaultPasswordChange
+from app.services import totp
 from app.services.audit import AuditService
 from app.services.principal import Principal
-from app.services.vault_auth import VaultCaller, device_type_name, normalize_email
+from app.services.vault_auth import (
+    VaultCaller,
+    clear_two_factor,
+    device_type_name,
+    normalize_email,
+    totp_context,
+)
 
 
 class StaleCipherError(Exception):
@@ -213,6 +227,8 @@ class VaultService:
         account.updated_at = now
         revoked = 0
         for device in await self.devices.for_user(account.user_id):
+            device.remember_token_hash = None
+            device.remember_until = None
             if device.revoked_at is None:
                 device.revoked_at = now
                 revoked += 1
@@ -225,6 +241,101 @@ class VaultService:
         )
         await self.db.commit()
         return account
+
+    # --- Tweestapsverificatie voor de Bitwarden-apps (fase 9) -------------------------
+
+    def _seal_totp(self, settings: Settings, account: VaultAccount, secret: str) -> bytes:
+        return seal_secret(settings.secret_key.get_secret_value(), secret, totp_context(account.user_id))
+
+    def _open_totp(self, settings: Settings, account: VaultAccount, sealed: bytes) -> str:
+        return open_secret(settings.secret_key.get_secret_value(), sealed, totp_context(account.user_id))
+
+    async def setup_two_factor(
+        self, p: Principal, master_password_hash: str, settings: Settings
+    ) -> tuple[str, str]:
+        account = await self._verify_master(p, master_password_hash, settings, "vault.2fa.setup")
+        if account.two_factor_enabled:
+            raise ConflictError(
+                "Tweestapsverificatie staat al aan. Zet ze eerst uit om een nieuwe app te koppelen."
+            )
+        secret = totp.new_secret()
+        account.totp_pending = self._seal_totp(settings, account, secret)
+        await self.db.commit()
+        return secret, totp.otpauth_uri(secret, account.email)
+
+    async def enable_two_factor(self, p: Principal, code: str, settings: Settings) -> str:
+        account = await self.accounts.lock(p.user.id)
+        if account is None:
+            raise NotFoundError("Je hebt nog geen kluis")
+        if account.two_factor_enabled:
+            raise ConflictError("Tweestapsverificatie staat al aan")
+        if account.totp_pending is None:
+            raise InvalidOperationError("Begin opnieuw: er is geen nieuwe koppeling klaar")
+        secret = self._open_totp(settings, account, account.totp_pending)
+        step = totp.verify(secret, code, None)
+        if step is None:
+            raise InvalidOperationError(
+                "De code klopt niet. Controleer de klok van je telefoon en probeer opnieuw."
+            )
+        recovery = totp.new_recovery_code()
+        account.totp_secret = account.totp_pending
+        account.totp_pending = None
+        account.totp_last_step = step
+        account.recovery_code_hash = hash_token(totp.normalize_recovery_code(recovery))
+        account.two_factor_enabled_at = datetime.now(UTC)
+        # Oude "onthoud mij"-tokens uit een vorige periode gelden niet meer.
+        for device in await self.devices.for_user(account.user_id):
+            device.remember_token_hash = None
+            device.remember_until = None
+        await self.audit.record(
+            "vault.2fa.enable",
+            p.actor,
+            target_type="vault",
+            target_id=p.user.id,
+            details={"method": "authenticator"},
+        )
+        await self.db.commit()
+        return recovery
+
+    async def disable_two_factor(
+        self, p: Principal, master_password_hash: str, code: str, settings: Settings
+    ) -> None:
+        account = await self._verify_master(p, master_password_hash, settings, "vault.2fa.disable")
+        if not account.two_factor_enabled or account.totp_secret is None:
+            raise InvalidOperationError("Tweestapsverificatie staat niet aan")
+        secret = self._open_totp(settings, account, account.totp_secret)
+        via = None
+        if totp.verify(secret, code, account.totp_last_step) is not None:
+            via = "authenticator"
+        elif account.recovery_code_hash and hmac.compare_digest(
+            hash_token(totp.normalize_recovery_code(code)), account.recovery_code_hash
+        ):
+            via = "herstelcode"
+        if via is None:
+            await self.db.commit()
+            raise InvalidOperationError("De code klopt niet")
+        clear_two_factor(account)
+        await self.audit.record(
+            "vault.2fa.disable", p.actor, target_type="vault", target_id=p.user.id, details={"via": via}
+        )
+        await self.db.commit()
+
+    async def admin_reset_two_factor(self, p: Principal, user_id: UUID) -> None:
+        """Beheerder: telefoon en herstelcode kwijt. Het master password blijft nodig."""
+        if not p.is_admin:
+            raise await self.audit.deny("vault.2fa.disable", p.actor, target_type="vault", target_id=user_id)
+        account = await self.accounts.lock(user_id)
+        if account is None or not account.two_factor_enabled:
+            raise NotFoundError("Deze gebruiker heeft geen tweestapsverificatie op de kluis")
+        clear_two_factor(account)
+        await self.audit.record(
+            "vault.2fa.disable",
+            p.actor,
+            target_type="vault",
+            target_id=user_id,
+            details={"via": "beheerder"},
+        )
+        await self.db.commit()
 
     async def reset(self, p: Principal) -> None:
         """Verwijdert de kluis met alle items. Zonder master password is de inhoud
@@ -247,6 +358,8 @@ class VaultService:
         device = await self.devices.get(device_id)
         if device is None or device.user_id != p.user.id:
             raise NotFoundError("Apparaat niet gevonden")
+        device.remember_token_hash = None
+        device.remember_until = None
         if device.revoked_at is None:
             device.revoked_at = datetime.now(UTC)
             await self.audit.record(
