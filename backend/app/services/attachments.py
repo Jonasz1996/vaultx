@@ -29,6 +29,7 @@ from app.services.audit import AuditService
 from app.services.notes import check_enc_file, check_enc_name
 from app.services.vault import VaultService
 from app.services.vault_auth import VaultCaller
+from app.services.vault_push import PushType
 
 # Geldigheid van een download-URL: kort in het antwoord op "geef me de bijlage",
 # langer in de sync (de clients vallen daarop terug).
@@ -158,6 +159,7 @@ class AttachmentService:
         cipher = await self.vault.get_cipher(c, cipher_id)
         cipher.revision_date = now
         await self.vault._record(c, "vault.attachment.upload", "vault_item", cipher_id, size=len(data))
+        await self.vault.push(c, PushType.SYNC_CIPHER_UPDATE, cipher_id, now)
         await self.db.commit()
 
     async def get(self, c: VaultCaller, cipher_id: UUID, attachment_id: UUID) -> VaultAttachment:
@@ -173,6 +175,7 @@ class AttachmentService:
         cipher.revision_date = now
         await self.db.delete(a)
         await self.vault._record(c, "vault.attachment.delete", "vault_item", cipher_id)
+        await self.vault.push(c, PushType.SYNC_CIPHER_UPDATE, cipher_id, now)
         await self.db.commit()
         return cipher
 

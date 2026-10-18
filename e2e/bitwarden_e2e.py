@@ -34,7 +34,10 @@ sys.path.insert(0, str(BACKEND))
 
 from tests.fake_oidc import FakeOIDCProvider  # noqa: E402
 
-DB = os.environ.get("VAULTX_DATABASE_URL", "postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_test")
+DB = os.environ.get(
+    "VAULTX_DATABASE_URL",
+    "postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_test",
+)
 BW = os.environ.get("BW", "bw")
 EMAIL = "Jonas.E2E@Example.com"
 PASSWORD = "een-heel-lang-master-password-42"
@@ -68,7 +71,8 @@ def self_signed_cert(directory: str) -> tuple[str, str]:
         .not_valid_before(now - datetime.timedelta(minutes=5))
         .not_valid_after(now + datetime.timedelta(days=1))
         .add_extension(
-            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), False
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            False,
         )
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
         .sign(key, hashes.SHA256())
@@ -77,7 +81,9 @@ def self_signed_cert(directory: str) -> tuple[str, str]:
     Path(cert_path).write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     Path(key_path).write_bytes(
         key.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
         )
     )
     return cert_path, key_path
@@ -111,7 +117,14 @@ class Bw:
             "NODE_EXTRA_CA_CERTS": ca_file,
         }
         # Een eventuele uitgaande proxy geldt niet voor de lokale testserver.
-        for var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY", "all_proxy"):
+        for var in (
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "https_proxy",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ):
             self.env.pop(var, None)
         self.session: str | None = None
 
@@ -120,7 +133,12 @@ class Bw:
         if self.session:
             env["BW_SESSION"] = self.session
         r = subprocess.run(
-            [BW, *args, "--nointeraction"], env=env, capture_output=True, text=True, input=stdin, timeout=120
+            [BW, *args, "--nointeraction"],
+            env=env,
+            capture_output=True,
+            text=True,
+            input=stdin,
+            timeout=120,
         )
         if check and r.returncode != 0:
             raise SystemExit(f"bw {' '.join(args[:2])} faalde ({r.returncode}):\n{r.stdout}\n{r.stderr}")
@@ -133,7 +151,66 @@ class Bw:
         return self.run("encode", stdin=json.dumps(obj)).stdout.strip()
 
 
-def login(client: httpx.Client, fake: FakeOIDCProvider, sub: str, email: str, groups: list[str]) -> None:
+class LiveSync:
+    """e2e/live_sync.mjs: de SignalR-client van de Bitwarden-apps, in een apart proces."""
+
+    def __init__(self, url: str, token: str, ca_file: str) -> None:
+        import queue
+        import threading
+
+        env = {**os.environ, "VAULTX_TOKEN": token, "NODE_EXTRA_CA_CERTS": ca_file}
+        self.proc = subprocess.Popen(
+            ["node", str(ROOT / "e2e" / "live_sync.mjs"), url],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        self.events: queue.Queue[dict] = queue.Queue()
+
+        def read() -> None:
+            assert self.proc.stdout is not None
+            for line in self.proc.stdout:
+                self.events.put(json.loads(line))
+
+        threading.Thread(target=read, daemon=True).start()
+
+    def __enter__(self) -> LiveSync:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self.proc.poll() is None:
+            self.proc.kill()
+
+    def expect(self, match, what: str, timeout: float = 20) -> dict:
+        import queue
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                event = self.events.get(timeout=max(0.1, deadline - time.monotonic()))
+            except queue.Empty:
+                raise SystemExit(f"live sync: geen {what} binnen {timeout:.0f} s") from None
+            if event["event"] in ("failed", "closed") and not match(event):
+                raise SystemExit(f"live sync: {event} terwijl {what} verwacht werd")
+            if match(event):
+                return event
+
+    def message(self, type_: int) -> dict:
+        event = self.expect(
+            lambda e: e["event"] == "message" and e["data"]["Type"] == type_,
+            f"melding van type {type_}",
+        )
+        return event["data"]
+
+
+def login(
+    client: httpx.Client,
+    fake: FakeOIDCProvider,
+    sub: str,
+    email: str,
+    groups: list[str],
+) -> None:
     fake.next_claims = {
         "sub": sub,
         "email": email,
@@ -170,7 +247,12 @@ def main() -> None:
         "VAULTX_NPM_SYNC_INTERVAL_MINUTES": "0",
         "VAULTX_LOG_LEVEL": "WARNING",
     }
-    subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=BACKEND, env=env, check=True)
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=BACKEND,
+        env=env,
+        check=True,
+    )
     server = subprocess.Popen(
         [
             sys.executable,
@@ -203,7 +285,13 @@ def main() -> None:
         user = httpx.Client(base_url=base, verify=cert)
         login(user, fake, "jonas-e2e", EMAIL, [])
         payload = subprocess.run(
-            ["node", "--experimental-strip-types", str(ROOT / "e2e" / "vault_enroll.mts"), EMAIL, PASSWORD],
+            [
+                "node",
+                "--experimental-strip-types",
+                str(ROOT / "e2e" / "vault_enroll.mts"),
+                EMAIL,
+                PASSWORD,
+            ],
             capture_output=True,
             text=True,
             check=True,
@@ -311,9 +399,18 @@ def main() -> None:
                     **template,
                     "name": "Proxmox",
                     "folderId": "6e0c7a7e-3f7e-4c55-9d7c-1f2a3b4c5d6e",
-                    "login": {**login_tpl, "username": "root", "password": "pve-pw-1", "uris": []},
+                    "login": {
+                        **login_tpl,
+                        "username": "root",
+                        "password": "pve-pw-1",
+                        "uris": [],
+                    },
                 },
-                {**template, "name": "Router", "login": {**login_tpl, "username": "admin", "password": "r2"}},
+                {
+                    **template,
+                    "name": "Router",
+                    "login": {**login_tpl, "username": "admin", "password": "r2"},
+                },
             ],
         }
         export_file = Path(appdata) / "export.json"
@@ -338,7 +435,11 @@ def main() -> None:
         }
         old = node_json("vault_password.mts", "derive", {"params": params, "password": PASSWORD})
         csrf = {"X-VaultX-CSRF": "1"}
-        r = user.post("/api/v1/me/vault/unlock", json={"master_password_hash": old["loginHash"]}, headers=csrf)
+        r = user.post(
+            "/api/v1/me/vault/unlock",
+            json={"master_password_hash": old["loginHash"]},
+            headers=csrf,
+        )
         assert r.status_code == 200, r.text
         change = node_json(
             "vault_password.mts",
@@ -362,23 +463,86 @@ def main() -> None:
         assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-1"
         PASSWORD_NOW[0] = new_password
 
+        step("Fase 9: live sync: een tweede apparaat hoort wijzigingen van bw via de notificatie-hub")
+        argon = {**params, "kdf": 1, "iterations": 3, "memory": 64, "parallelism": 4}
+        listener_hash = node_json("vault_password.mts", "derive", {"params": argon, "password": new_password})
+        r = httpx.post(
+            f"{base}/identity/connect/token",
+            verify=cert,
+            data={
+                "grant_type": "password",
+                "username": email,
+                "password": listener_hash["loginHash"],
+                "scope": "api offline_access",
+                "client_id": "desktop",
+                "deviceType": "6",
+                "deviceIdentifier": "e2e-desktop-listener",
+                "deviceName": "linux",
+            },
+        )
+        assert r.status_code == 200, r.text
+        listener_token = r.json()["access_token"]
+        auth = {"Authorization": f"Bearer {listener_token}"}
+        devices = httpx.get(f"{base}/api/devices", headers=auth, verify=cert).json()["data"]
+        bw_device = next(d["identifier"] for d in devices if d["identifier"] != "e2e-desktop-listener")
+        listener_id = next(d["id"] for d in devices if d["identifier"] == "e2e-desktop-listener")
+        with LiveSync(f"{base}/notifications", listener_token, cert) as live:
+            live.expect(lambda e: e["event"] == "connected", "verbinding")
+            live_folder = bw.json("create", "folder", bw.encode({"name": "Live"}))
+            msg = live.message(7)
+            assert msg["Payload"]["Id"] == live_folder["id"] and msg["ContextId"] == bw_device, msg
+            proxmox = bw.json("list", "items", "--search", "Proxmox")[0]
+            proxmox["login"]["password"] = "pve-pw-live"
+            bw.json("edit", "item", proxmox["id"], bw.encode(proxmox))
+            msg = live.message(0)
+            assert msg["Payload"]["Id"] == proxmox["id"], msg
+            router = bw.json("list", "items", "--search", "Router")[0]
+            bw.run("delete", "item", router["id"], "--permanent")
+            assert live.message(2)["Payload"]["Id"] == router["id"]
+            # SignalR verbreekt na 30 s zonder bericht: de pings van VaultX houden ze open
+            time.sleep(35)
+            created = bw.json(
+                "create",
+                "item",
+                bw.encode({**template, "name": "Na de pauze", "login": login_tpl}),
+            )
+            assert live.message(1)["Payload"]["Id"] == created["id"]
+            # Apparaat afmelden in VaultX: de app krijgt LogOut en de verbinding gaat dicht
+            r = user.post(
+                f"/api/v1/me/vault/devices/{listener_id}/revoke",
+                headers={"X-VaultX-CSRF": "1"},
+            )
+            assert r.status_code == 200, r.text
+            assert live.message(11)["Payload"]["UserId"], "LogOut zonder gebruiker"
+            live.expect(lambda e: e["event"] == "closed", "sluiten na LogOut")
+        assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-live"
+
         step("Fase 9: tweestapsverificatie aanzetten, daarna inloggen met bw --method 0 --code")
         from app.services import totp
 
-        params = {**params, "kdf": 1, "iterations": 3, "memory": 64, "parallelism": 4}
-        now_hash = node_json("vault_password.mts", "derive", {"params": params, "password": new_password})
-        r = user.post("/api/v1/me/vault/2fa/setup", json={"master_password_hash": now_hash["loginHash"]}, headers=csrf)
+        now_hash = listener_hash
+        r = user.post(
+            "/api/v1/me/vault/2fa/setup",
+            json={"master_password_hash": now_hash["loginHash"]},
+            headers=csrf,
+        )
         assert r.status_code == 200, r.text
         secret = r.json()["secret"]
-        r = user.post("/api/v1/me/vault/2fa/enable", json={"code": totp.code_at(secret)}, headers=csrf)
+        r = user.post(
+            "/api/v1/me/vault/2fa/enable",
+            json={"code": totp.code_at(secret)},
+            headers=csrf,
+        )
         assert r.status_code == 200, r.text
         bw.run("logout", check=False)
         bw.session = None
         no_code = bw.run("login", email, new_password, "--raw", check=False)
         assert no_code.returncode != 0, "login zonder code lukte"
         code = totp.code_at(secret, time.time() + 30)
-        bw.session = bw.run("login", email, new_password, "--method", "0", "--code", code, "--raw").stdout.strip()
-        assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-1"
+        bw.session = bw.run(
+            "login", email, new_password, "--method", "0", "--code", code, "--raw"
+        ).stdout.strip()
+        assert bw.run("get", "password", "Proxmox").stdout.strip() == "pve-pw-live"
         assert user.get("/api/v1/me/vault").json()["two_factor_enabled"] is True
 
         step("Fase 9: bijlage toevoegen, downloaden en verwijderen met bw")
@@ -390,7 +554,15 @@ def main() -> None:
         assert att["fileName"] == "router-backup.cfg", att
         bw.run("sync", "--force")
         out = Path(appdata) / "terug.cfg"
-        bw.run("get", "attachment", "router-backup.cfg", "--itemid", proxmox_id, "--output", str(out))
+        bw.run(
+            "get",
+            "attachment",
+            "router-backup.cfg",
+            "--itemid",
+            proxmox_id,
+            "--output",
+            str(out),
+        )
         assert out.read_bytes() == attach_src.read_bytes(), "bijlage komt niet ongeschonden terug"
         bw.run("delete", "attachment", att["id"], "--itemid", proxmox_id)
         bw.run("sync", "--force")
@@ -401,14 +573,24 @@ def main() -> None:
         login(admin, fake, "admin-e2e", "admin-e2e@example.com", ["vaultx-admins"])
         me = user.get("/api/v1/me").json()
         r = admin.patch(
-            f"/api/v1/users/{me['id']}", json={"is_active": False}, headers={"X-VaultX-CSRF": "1"}
+            f"/api/v1/users/{me['id']}",
+            json={"is_active": False},
+            headers={"X-VaultX-CSRF": "1"},
         )
         assert r.status_code == 200, r.text
         assert bw.run("sync", "--force", check=False).returncode != 0, "sync lukte na deactiveren"
         bw.run("logout", check=False)
         bw.session = None
         again = bw.run(
-            "login", email, PASSWORD_NOW[0], "--method", "0", "--code", totp.code_at(secret), "--raw", check=False
+            "login",
+            email,
+            PASSWORD_NOW[0],
+            "--method",
+            "0",
+            "--code",
+            totp.code_at(secret),
+            "--raw",
+            check=False,
         )
         assert again.returncode != 0, "login lukte na deactiveren"
         print((again.stdout + again.stderr).strip().splitlines()[-1])
@@ -416,7 +598,10 @@ def main() -> None:
         audit = admin.get("/api/v1/audit", params={"action": "vault.", "limit": 100}).json()["items"]
         actions = sorted({(a["action"], a["outcome"]) for a in audit})
         print("auditregels:", actions)
-        assert ("vault.login", "failure") in actions and ("vault.login", "denied") in actions
+        assert ("vault.login", "failure") in actions and (
+            "vault.login",
+            "denied",
+        ) in actions
         step(f"OK: Bitwarden CLI {version} werkt tegen VaultX")
     finally:
         server.terminate()

@@ -6,9 +6,10 @@ protocol, afgeleid uit het gedrag en de publieke broncode van de clients.
 
 from fastapi import APIRouter
 
-from app.api.bitwarden import core, icons, identity
+from app.api.bitwarden import core, icons, identity, notifications
 
 router = APIRouter()
 router.include_router(identity.router)
 router.include_router(core.router)
 router.include_router(icons.router)
+router.include_router(notifications.router)

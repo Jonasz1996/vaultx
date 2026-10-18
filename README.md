@@ -18,6 +18,7 @@ misten tegenover Bitwarden en Vaultwarden).
 - Websitepictogrammen, opgehaald door VaultX zelf; privé-adressen enkel voor je eigen apps uit NPM en de catalogus
 - Tweestapsverificatie voor de apps met een authenticator-app, herstelcode en "onthoud mij"
 - Master password wijzigen op Mijn kluis, ook overstappen naar Argon2id; alle apparaten worden afgemeld
+- Live synchronisatie: een wijziging in de ene app staat meteen in de andere (desktop, browserextensie, webkluis); afmelden of deactiveren sluit de app meteen af. Zet in NPM "Websockets Support" aan op de VaultX-host
 - Alles getest met de echte Bitwarden CLI 2026.9.1 in CI. Zie [docs/bitwarden.md](docs/bitwarden.md)
 
 **Fase 8**

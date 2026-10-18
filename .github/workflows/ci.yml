@@ -258,6 +258,9 @@ jobs:
       # De e2e draait de browsercode (Argon2id via hash-wasm) in Node.
       - run: npm ci
         working-directory: frontend
+      # Live sync: dezelfde SignalR-client als de Bitwarden-apps (e2e/package.json)
+      - run: npm ci
+        working-directory: e2e
       - name: Login, sync en items met bw
         working-directory: backend
         env:

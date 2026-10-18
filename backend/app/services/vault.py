@@ -48,6 +48,7 @@ from app.services.vault_auth import (
     normalize_email,
     totp_context,
 )
+from app.services.vault_push import PushType, publish
 
 
 class StaleCipherError(Exception):
@@ -239,6 +240,7 @@ class VaultService:
             target_id=p.user.id,
             details={"kdf": data.kdf, "kdf_iterations": data.kdf_iterations, "devices_signed_out": revoked},
         )
+        await publish(self.db, account.user_id, PushType.LOG_OUT)
         await self.db.commit()
         return account
 
@@ -352,6 +354,7 @@ class VaultService:
             target_id=p.user.id,
             details={"items_deleted": items + trash},
         )
+        await publish(self.db, p.user.id, PushType.LOG_OUT)
         await self.db.commit()
 
     async def revoke_device(self, p: Principal, device_id: UUID) -> VaultDevice:
@@ -369,6 +372,7 @@ class VaultService:
                 target_id=device.id,
                 details={"device": device.name, "client": device_type_name(device.type)},
             )
+            await publish(self.db, device.user_id, PushType.LOG_OUT, device_id=device.id)
             await self.db.commit()
         return device
 
@@ -404,6 +408,23 @@ class VaultService:
             target_id=target_id,
             details={"client": c.client_label, **details},
         )
+
+    async def push(
+        self, c: VaultCaller, type_: PushType, item_id: UUID | None = None, revision: datetime | None = None
+    ) -> None:
+        """Meldt de wijziging aan de andere apparaten (live sync), bij de commit."""
+        await publish(
+            self.db, c.account.user_id, type_, item_id=item_id, revision=revision, context=c.device.identifier
+        )
+
+    async def _push_many(
+        self, c: VaultCaller, ciphers: list[VaultCipher], type_: PushType, revision: datetime
+    ) -> None:
+        """Eén item: een gerichte melding. Meerdere: zoals Bitwarden één 'sync je items'."""
+        if len(ciphers) == 1:
+            await self.push(c, type_, ciphers[0].id, revision)
+        elif ciphers:
+            await self.push(c, PushType.SYNC_CIPHERS, revision=revision)
 
     async def _folder_id(self, c: VaultCaller, folder_id: UUID | None) -> UUID | None:
         if folder_id is not None and await self.folders.owned(c.account.user_id, folder_id) is None:
@@ -451,6 +472,7 @@ class VaultService:
         )
         await self.db.flush()
         await self._record(c, "vault.item.create", "vault_item", cipher.id, type=type_)
+        await self.push(c, PushType.SYNC_CIPHER_CREATE, cipher.id, now)
         await self.db.commit()
         return cipher
 
@@ -502,6 +524,7 @@ class VaultService:
         await self._record(
             c, "vault.import", "vault", c.account.user_id, items=len(ciphers), folders=created_folders
         )
+        await self.push(c, PushType.SYNC_VAULT, revision=now)
         await self.db.commit()
         return len(ciphers), created_folders
 
@@ -534,6 +557,7 @@ class VaultService:
         cipher.archived_at = archived_at
         cipher.revision_date = now
         await self._record(c, "vault.item.update", "vault_item", cipher.id, type=type_)
+        await self.push(c, PushType.SYNC_CIPHER_UPDATE, cipher.id, now)
         await self.db.commit()
         return cipher
 
@@ -544,6 +568,7 @@ class VaultService:
         cipher.folder_id = await self._folder_id(c, folder_id)
         cipher.favorite = favorite
         cipher.revision_date = await self._touch(c)
+        await self.push(c, PushType.SYNC_CIPHER_UPDATE, cipher.id, cipher.revision_date)
         await self.db.commit()
         return cipher
 
@@ -557,6 +582,7 @@ class VaultService:
                 cipher.deleted_at = now
                 cipher.revision_date = now
                 await self._record(c, "vault.item.trash", "vault_item", cipher.id)
+        await self._push_many(c, ciphers, PushType.SYNC_CIPHER_UPDATE, now)
         await self.db.commit()
 
     async def restore_ciphers(self, c: VaultCaller, cipher_ids: list[UUID]) -> list[VaultCipher]:
@@ -569,6 +595,7 @@ class VaultService:
                 cipher.deleted_at = None
                 cipher.revision_date = now
                 await self._record(c, "vault.item.restore", "vault_item", cipher.id)
+        await self._push_many(c, ciphers, PushType.SYNC_CIPHER_UPDATE, now)
         await self.db.commit()
         return ciphers
 
@@ -576,7 +603,8 @@ class VaultService:
         ciphers = await self.ciphers.owned_many(c.account.user_id, cipher_ids)
         if not ciphers:
             raise NotFoundError("Item niet gevonden")
-        await self._touch(c)
+        now = await self._touch(c)
+        await self._push_many(c, ciphers, PushType.SYNC_LOGIN_DELETE, now)
         for cipher in ciphers:
             await self._record(c, "vault.item.delete", "vault_item", cipher.id)
             await self.ciphers.delete(cipher)
@@ -589,6 +617,7 @@ class VaultService:
         for cipher in ciphers:
             cipher.folder_id = folder_id
             cipher.revision_date = now
+        await self._push_many(c, ciphers, PushType.SYNC_CIPHER_UPDATE, now)
         await self.db.commit()
 
     async def create_folder(self, c: VaultCaller, name: str) -> VaultFolder:
@@ -596,6 +625,7 @@ class VaultService:
         folder = self.folders.add(VaultFolder(user_id=c.account.user_id, name=name, revision_date=now))
         await self.db.flush()
         await self._record(c, "vault.folder.create", "vault_folder", folder.id)
+        await self.push(c, PushType.SYNC_FOLDER_CREATE, folder.id, now)
         await self.db.commit()
         return folder
 
@@ -610,12 +640,14 @@ class VaultService:
         folder.name = name
         folder.revision_date = await self._touch(c)
         await self._record(c, "vault.folder.update", "vault_folder", folder.id)
+        await self.push(c, PushType.SYNC_FOLDER_UPDATE, folder.id, folder.revision_date)
         await self.db.commit()
         return folder
 
     async def delete_folder(self, c: VaultCaller, folder_id: UUID) -> None:
         folder = await self.get_folder(c, folder_id)
-        await self._touch(c)
+        now = await self._touch(c)
         await self._record(c, "vault.folder.delete", "vault_folder", folder.id)
+        await self.push(c, PushType.SYNC_FOLDER_DELETE, folder.id, now)
         await self.folders.delete(folder)
         await self.db.commit()

@@ -164,6 +164,36 @@ opnieuw in met het nieuwe wachtwoord.
 Argon2id draait in de browser als WebAssembly; daarom staat `'wasm-unsafe-eval'`
 in de Content-Security-Policy (dat laat geen JavaScript-`eval` toe).
 
+## Live synchronisatie (fase 9)
+
+Wijzig je een item in de ene app, dan staat het meteen in de andere. De
+desktop-app, de browserextensie en de webkluis houden daarvoor een WebSocket open
+naar `/notifications/hub` (SignalR, zoals bij Bitwarden). VaultX stuurt daarover
+enkel *wat* er veranderde (welk item of welke map), nooit inhoud; de app haalt het
+item daarna zelf op. Een apparaat afmelden op Mijn kluis, het master password
+wijzigen, de kluis wissen of de gebruiker deactiveren meldt de apps meteen af.
+
+Wat je moet doen:
+
+- **NPM**: zet op de proxy host van VaultX **Websockets Support** aan. Staat er in
+  *Advanced* een eigen `location /`, zet daar dan ook
+  `proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`
+  in (of beter: een aparte `location /notifications/` met die regels).
+- **Eigen nginx-site**: neem de location `/notifications/` over uit
+  `deploy/debian/nginx-vaultx.conf` (`update.sh` doet dat zelf).
+
+Zonder WebSocket blijft alles werken zoals voorheen: de apps synchroniseren bij het
+openen, na ontgrendelen en periodiek.
+
+- De meldingen gaan via PostgreSQL (`NOTIFY` in dezelfde transactie): enkel na een
+  geslaagde wijziging, en ook met meerdere VaultX-instanties.
+- De apps zetten hun access token in de URL; nginx logt die location niet en
+  VaultX vervangt het token in zijn eigen logs door `***`.
+- **iPhone en Android** krijgen geen live meldingen: die lopen bij Bitwarden via
+  pushmeldingen van Apple en Google over de Bitwarden-relay, waarvoor een
+  installatie-id van bitwarden.com nodig is. De mobiele apps synchroniseren bij
+  openen en met naar beneden trekken.
+
 ## Master password vergeten
 
 Niemand kan het herstellen, ook een beheerder niet. Op **Mijn kluis** kan je de
@@ -174,12 +204,12 @@ apparaten worden afgemeld.
 
 Bewust nog niet gebouwd, in deze volgorde voorgesteld:
 
-1. **Live sync** (notifications-hub): nu synchroniseren de apps periodiek of bij openen.
-2. **Send** (tekst of bestand tijdelijk delen via een link).
-3. **Organisaties en collecties** (gedeelde kluizen per VaultX-organisatie en -team),
+1. **Send** (tekst of bestand tijdelijk delen via een link).
+2. **Organisaties en collecties** (gedeelde kluizen per VaultX-organisatie en -team),
    daarna **noodtoegang**.
-4. **API-sleutel** voor de CLI (`bw login --apikey`), sleutelrotatie van de user key.
-5. Tweestapsverificatie via e-mail, WebAuthn/YubiKey of Duo.
+3. **API-sleutel** voor de CLI (`bw login --apikey`), sleutelrotatie van de user key.
+4. Tweestapsverificatie via e-mail, WebAuthn/YubiKey of Duo.
+5. Live meldingen op iPhone en Android (vereist de pushrelay van Bitwarden).
 6. Bitwarden-**v2-accounts** (COSE, signing keys, security state): het datamodel
    heeft er al een kolom voor, de endpoints nog niet.
 
@@ -202,7 +232,8 @@ Zo is bijvoorbeeld `POST /api/accounts/key-management/user-key-id` ontdekt: CLI
 `/api/ciphers` (aanmaken, lezen, wijzigen, gedeeltelijk wijzigen, prullenbak,
 terugzetten, verwijderen, verplaatsen, ook in bulk), `/api/ciphers/import`,
 `/api/ciphers/{id}/attachment/...` (v2, upload, download, renew, verwijderen),
-`/api/folders` en `/icons/{domein}/icon.png`.
+`/api/folders`, `/icons/{domein}/icon.png` en de WebSocket `/notifications/hub`
+(SignalR, MessagePack of JSON; `POST /notifications/hub/negotiate`).
 
 VaultX-eigen API voor de webinterface: `GET/POST/DELETE /api/v1/me/vault`,
 `POST /api/v1/me/vault/unlock`, `POST /api/v1/me/vault/password`,

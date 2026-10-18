@@ -19,6 +19,7 @@ from app.services.identity import effective_admin
 from app.services.password_login import check_password_policy, set_password
 from app.services.principal import Principal
 from app.services.sessions import SessionService
+from app.services.vault_push import PushType, publish
 
 
 def membership_briefs(memberships) -> list[MembershipBrief]:
@@ -116,6 +117,8 @@ class UserService:
             revoked = 0
             if not data.is_active:
                 revoked = await self.sessions.revoke_for_user(user.id, "user_deactivated")
+                # Bitwarden-apps met een open verbinding melden zich meteen af.
+                await publish(self.db, user.id, PushType.LOG_OUT)
             await self.audit.record(
                 "user.activated" if data.is_active else "user.deactivated",
                 p.actor,

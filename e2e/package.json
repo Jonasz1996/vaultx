@@ -1,0 +1,9 @@
+{
+  "name": "vaultx-e2e",
+  "private": true,
+  "description": "Hulpmiddelen voor de e2e-tests: de SignalR-client die de Bitwarden-apps gebruiken",
+  "dependencies": {
+    "@microsoft/signalr": "8.0.7",
+    "@microsoft/signalr-protocol-msgpack": "8.0.7"
+  }
+}
