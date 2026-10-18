@@ -103,6 +103,7 @@ Nieuwe Proxy Host:
 - Domain: `vaultx.jouwdomein.be`
 - Scheme `http`, Forward Hostname = IP van de container, poort `80`
 - SSL: Let's Encrypt-certificaat, Force SSL en HSTS aan
+- **Websockets Support** aan: live synchronisatie voor de Bitwarden-apps (fase 9)
 
 Zet **geen** Authentik forward-auth (outpost) voor VaultX zelf: VaultX doet de
 OIDC-login zelf, en forward-auth zou ook de back-channel logout van Authentik

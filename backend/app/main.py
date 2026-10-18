@@ -16,6 +16,7 @@ from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging
 from app.services.npm_scheduler import start_scheduler, stop_scheduler
 from app.services.oidc import OIDCProvider
+from app.services.vault_push import NotificationHub
 
 log = logging.getLogger("app")
 
@@ -29,9 +30,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not hasattr(app.state, "oidc"):
         app.state.oidc = OIDCProvider(settings)
     scheduler = start_scheduler(settings)
+    if settings.vault_enabled and not hasattr(app.state, "vault_hub"):
+        app.state.vault_hub = NotificationHub(settings.database_url)
+        app.state.vault_hub.start()
     try:
         yield
     finally:
+        if hasattr(app.state, "vault_hub"):
+            await app.state.vault_hub.stop()
         await stop_scheduler(scheduler)
         await app.state.oidc.aclose()
         await dispose_engine()
