@@ -9,6 +9,7 @@ const errors: Record<string, string> = {
   idp_unreachable: "Authentik is momenteel niet bereikbaar.",
   token_invalid: "Het antwoord van Authentik kon niet geverifieerd worden.",
   account_disabled: "Je account is gedeactiveerd in VaultX. Contacteer een beheerder.",
+  authentik_not_here: "Inloggen met Authentik kan niet op dit adres. Log in met je VaultX-wachtwoord.",
 };
 
 interface Methods {
@@ -53,9 +54,11 @@ export function LoginPage() {
         <img src="/favicon.svg" alt="" width={48} height={48} />
         <h1>VaultX</h1>
         <p className="muted">
-          {methods.password
+          {methods.password && methods.authentik
             ? "Log in met je VaultX-account of met Authentik."
-            : "Beheeromgeving. Je logt in met je Authentik-account."}
+            : methods.password
+              ? "Log in met je VaultX-account."
+              : "Beheeromgeving. Je logt in met je Authentik-account."}
         </p>
         {params.get("logged_out") && <div className="info-box">Je bent uitgelogd.</div>}
         {error && <div className="error-box">{errors[error] ?? `Login mislukt (${error}).`}</div>}
@@ -87,17 +90,21 @@ export function LoginPage() {
                 {pending ? "Bezig…" : "Inloggen"}
               </button>
             </form>
-            <div className="login-divider">
-              <span>of</span>
-            </div>
+            {methods.authentik && (
+              <div className="login-divider">
+                <span>of</span>
+              </div>
+            )}
           </>
         )}
-        <a
-          className={methods.password ? "btn btn-wide" : "btn btn-primary btn-wide"}
-          href={`/auth/login?next=${encodeURIComponent(next)}`}
-        >
-          Inloggen met Authentik
-        </a>
+        {methods.authentik && (
+          <a
+            className={methods.password ? "btn btn-wide" : "btn btn-primary btn-wide"}
+            href={`/auth/login?next=${encodeURIComponent(next)}`}
+          >
+            Inloggen met Authentik
+          </a>
+        )}
       </div>
     </div>
   );

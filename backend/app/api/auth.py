@@ -4,6 +4,7 @@ login met een VaultX-wachtwoord (fase 8)."""
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import logging
 import re
 from urllib.parse import urlencode, urlsplit
@@ -70,23 +71,44 @@ def _allowed_origin(request: Request, settings: Settings) -> str | None:
     return origin if origin in settings.allowed_origins else None
 
 
+def _cookie_secure(request: Request, settings: Settings) -> bool:
+    """Secure-vlag voor cookies op dit adres.
+
+    Altijd Secure, behalve bij een http-verzoek op een adres dat bewust zonder TLS mag: een
+    http-origin uit VAULTX_EXTRA_ORIGINS of een privé/loopback-IP (bv. http://192.168.0.50 op
+    het LAN). Een browser bewaart een Secure-cookie over http niet, dan lukt inloggen daar nooit.
+    Een domeinnaam over http (bv. de publieke naam zonder NPM ervoor) krijgt nooit zo'n cookie.
+    """
+    if not settings.cookie_secure:
+        return False
+    if request.url.scheme == "https":
+        return True
+    if _request_origin(request) in settings.extra_origins:
+        return False
+    try:
+        ip = ipaddress.ip_address((request.url.hostname or "").strip("[]"))
+    except ValueError:
+        return True
+    return not (ip.is_private or ip.is_loopback)
+
+
+def _authentik_origin(request: Request, settings: Settings) -> str | None:
+    """Origin waarvoor een Authentik-login kan: geconfigureerd, of dezelfde host als de publieke URL."""
+    origin = _allowed_origin(request, settings)
+    if origin is None and request.url.hostname == urlsplit(settings.public_url).hostname:
+        origin = settings.public_origin  # zelfde host: de cookie hangt niet af van schema of poort
+    return origin
+
+
 @router.get("/login", summary="Start login bij Authentik")
 async def login(request: Request, settings: SettingsDep, oidc: OIDCDep, next: str | None = None) -> Response:
     next = safe_next(next)
-    origin = _allowed_origin(request, settings)
+    origin = _authentik_origin(request, settings)
     if origin is None:
-        if request.url.hostname != urlsplit(settings.public_url).hostname:
-            # Authentik stuurt enkel terug naar een geregistreerde redirect-URI, en de state-cookie
-            # moet op hetzelfde adres staan: start de login dan op het publieke adres.
-            log.info(
-                "Authentik-login op %s, dat niet in VAULTX_EXTRA_ORIGINS staat: via %s",
-                _request_origin(request),
-                settings.public_origin,
-            )
-            return RedirectResponse(
-                f"{settings.public_url}/auth/login?{urlencode({'next': next})}", status_code=303
-            )
-        origin = settings.public_origin  # zelfde host: de cookie hangt niet af van schema of poort
+        # Authentik stuurt enkel terug naar een geregistreerde redirect-URI. Niet stilletjes naar
+        # het publieke adres springen (dat is misschien onbereikbaar): op dit adres kan het niet.
+        log.info("Authentik-login op %s, dat niet in VAULTX_EXTRA_ORIGINS staat", _request_origin(request))
+        return _error_redirect("authentik_not_here", next)
     redirect_uri = f"{origin}/auth/callback"
     state, nonce, verifier = new_token(), new_token(), new_token(48)
     try:
@@ -102,7 +124,7 @@ async def login(request: Request, settings: SettingsDep, oidc: OIDCDep, next: st
         max_age=STATE_MAX_AGE,
         path="/auth",
         httponly=True,
-        secure=settings.cookie_secure,
+        secure=_cookie_secure(request, settings),
         samesite="lax",
     )
     return resp
@@ -181,25 +203,29 @@ async def callback(
     # Terug naar de pagina waar de gebruiker stond, op hetzelfde adres (relatief).
     resp = RedirectResponse(safe_next(saved["next"]), status_code=303)
     resp.delete_cookie(STATE_COOKIE, path="/auth")
-    _session_cookie(resp, settings, token)
+    _session_cookie(resp, request, settings, token)
     return resp
 
 
-def _session_cookie(resp: Response, settings: Settings, token: str) -> None:
+def _session_cookie(resp: Response, request: Request, settings: Settings, token: str) -> None:
     resp.set_cookie(
         settings.session_cookie_name,
         token,
         max_age=settings.session_ttl_hours * 3600,
         path="/",
         httponly=True,
-        secure=settings.cookie_secure,
+        secure=_cookie_secure(request, settings),
         samesite="lax",
     )
 
 
 @router.get("/methods", summary="Welke loginmethodes de loginpagina toont")
-async def methods(settings: SettingsDep) -> dict:
-    return {"authentik": True, "password": settings.local_login_enabled}
+async def methods(request: Request, settings: SettingsDep) -> dict:
+    # Geen verbinding met Authentik nodig: de loginpagina laadt ook als Authentik of NPM plat ligt.
+    return {
+        "authentik": _authentik_origin(request, settings) is not None,
+        "password": settings.local_login_enabled,
+    }
 
 
 class PasswordLogin(BaseModel):
@@ -226,7 +252,7 @@ async def password_login(
     await db.commit()
     # Relatief: wie VaultX op een ander adres opende, blijft daar (de cookie staat ook daar).
     resp = JSONResponse({"redirect_url": safe_next(data.next)})
-    _session_cookie(resp, settings, token)
+    _session_cookie(resp, request, settings, token)
     return resp
 
 

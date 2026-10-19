@@ -229,18 +229,60 @@ async def test_login_on_extra_origin_stays_there(make_client, fake_oidc):
     assert q["post_logout_redirect_uri"] == [f"{EXTRA_ORIGIN}/login?logged_out=1"]
 
 
-async def test_login_on_unknown_origin_goes_via_public_url(make_client):
+async def test_authentik_login_on_unknown_origin_does_not_jump_to_public_url(make_client):
     c = await make_client("http://192.168.1.50")
+    assert (await c.get("/auth/methods")).json() == {"authentik": False, "password": True}
     r = await c.get("/auth/login", params={"next": "/vault"})
     assert r.status_code == 303
-    assert r.headers["location"] == f"{PUBLIC_URL}/auth/login?next=%2Fvault"
-    assert "vaultx_oidc" not in r.headers.get("set-cookie", "")
+    assert r.headers["location"] == "/login?error=authentik_not_here&next=%2Fvault"
+    assert 'vaultx_oidc=""' in r.headers.get("set-cookie", "")  # enkel opgeruimd, geen state
 
 
 async def test_host_header_is_not_trusted_for_redirect_uri(make_client):
     c = await make_client()
     r = await c.get("/auth/login", headers={"Host": "evil.example.com"})
-    assert r.headers["location"].startswith(f"{PUBLIC_URL}/auth/login")
+    assert r.headers["location"] == "/login?error=authentik_not_here"
+
+
+@pytest.mark.parametrize(
+    ("url", "secure"),
+    [
+        ("https://vaultx.example.be/", True),
+        ("http://vaultx.example.be/", True),  # publieke naam zonder TLS: nooit zonder Secure
+        ("http://evil.example.com/", True),
+        ("http://192.168.0.50/", False),  # LAN-IP zonder NPM ervoor
+        ("http://10.1.2.3:8080/", False),
+        ("http://127.0.0.1/", False),
+        ("http://[fd00::5]/", False),
+        ("http://8.8.8.8/", True),  # publiek IP
+        ("http://vaultx.lan:8080/", False),  # http-origin uit VAULTX_EXTRA_ORIGINS
+        ("http://vaultx.lan:9999/", True),
+    ],
+)
+def test_cookie_secure_follows_address(url, secure):
+    from starlette.requests import Request
+
+    from app.api.auth import _cookie_secure
+
+    parts = urlsplit(url)
+    scope = {
+        "type": "http",
+        "scheme": parts.scheme,
+        "server": (parts.hostname, parts.port or 80),
+        "path": "/",
+        "query_string": b"",
+        "headers": [(b"host", parts.netloc.encode())],
+    }
+    settings = Settings(
+        secret_key="x" * 32,
+        oidc_issuer="https://a/",
+        oidc_client_id="c",
+        oidc_client_secret="s",
+        public_url="https://vaultx.example.be",
+        extra_origins=EXTRA_ORIGIN,
+        cookie_secure=True,
+    )
+    assert _cookie_secure(Request(scope), settings) is secure
 
 
 async def test_login_error_keeps_the_page(make_client):
