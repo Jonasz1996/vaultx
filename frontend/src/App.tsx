@@ -52,7 +52,8 @@ export const router = createBrowserRouter([
         element: <Layout />,
         children: [
           { index: true, element: <DashboardPage /> },
-          { path: "vault", element: <VaultPage /> },
+          { path: "vault", element: <VaultPage tab="items" /> },
+          { path: "vault/settings", element: <VaultPage tab="settings" /> },
           {
             path: "notes",
             element: (

@@ -30,6 +30,32 @@ actief is. Wordt iemand in VaultX gedeactiveerd, dan werken zijn apps meteen
 niet meer: sync faalt, verversen faalt en opnieuw inloggen wordt geweigerd. Dat
 staat ook in de auditlog (`vault.login` met uitkomst `denied`).
 
+## Webkluis in VaultX
+
+Op **Mijn kluis → Items** bekijk en bewerk je je kluis in de browser, zoals in de
+webkluis van Vaultwarden: zoeken, favorieten, soorten en mappen, items aanmaken
+(login, notitie, kaart, identiteit), bewerken met wachtwoordgenerator, live
+TOTP-codes, eigen velden, bijlagen, wachtwoordgeschiedenis en de prullenbak.
+SSH-sleutels uit de apps kan je bekijken en bewerken. De apps en apparaten,
+tweestapsverificatie en het master password staan op het tabblad
+**Apps, apparaten en beveiliging**.
+
+De webkluis logt in zoals een Bitwarden-client (`/identity/connect/token`, client
+`web`): je browser leidt de login-hash af uit je master password, krijgt de
+versleutelde user key en ont- en versleutelt alle items zelf, in hetzelfde formaat
+als de apps (ook items met een eigen itemsleutel; passkeys en andere velden die de
+webkluis niet toont blijven bij opslaan staan). Daardoor gelden ook hier:
+
+- de grens op foute master passwords en de tweestapsverificatie van de kluis
+  (met "Deze browser 30 dagen onthouden");
+- de apparatenlijst: de browser staat erin als *VaultX-webkluis (Chrome)* en kan
+  je daar afmelden;
+- live sync naar de apps, en de auditlog.
+
+Tokens en sleutels blijven enkel in het geheugen van het tabblad. Herladen,
+**Vergrendelen** of 15 minuten niets doen vergrendelt de kluis. De webkluis heeft
+HTTPS nodig (WebCrypto), net als de notities.
+
 ## Een app verbinden
 
 HTTPS is verplicht: de Bitwarden-clients weigeren een `http://`-server. Achter
@@ -149,8 +175,9 @@ slaat een apparaat dat 30 dagen over. De CLI: `bw login <e-mail> --method 0 --co
   `/opt/vaultx/venv/bin/python -m app.cli reset-vault-2fa jij@jouwdomein.be`.
   Het master password blijft altijd nodig.
 
-Dit geldt voor de Bitwarden-apps, extensies en CLI. In de VaultX-webinterface zelf
-beschermt Authentik je login (en voor gewone accounts het VaultX-wachtwoord).
+Dit geldt voor de Bitwarden-apps, extensies, CLI en de webkluis op Mijn kluis. Voor
+de VaultX-webinterface zelf beschermt Authentik je login (en voor gewone accounts
+het VaultX-wachtwoord).
 
 ## Master password wijzigen (fase 9)
 
