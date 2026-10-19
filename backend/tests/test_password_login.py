@@ -308,10 +308,12 @@ async def test_cli_create_and_reset(make_client):
         await cli.create_user("root", "ander@example.com", None, False, "cli-wachtwoord-12345")
 
 
-async def test_password_login_works_on_any_address(admin, make_client):
-    # Ook op een adres dat niet in de configuratie staat: geen omweg via VAULTX_PUBLIC_URL.
+@pytest.mark.parametrize("base_url", ["http://192.168.1.50", "https://192.168.1.50"])
+async def test_password_login_works_on_any_address(admin, make_client, base_url):
+    # Ook op een adres dat niet in de configuratie staat: geen omweg via VAULTX_PUBLIC_URL. Ook
+    # over https met het zelfondertekende certificaat van de container (WebCrypto vraagt https).
     await create(admin)
-    c = await make_client("http://192.168.1.50")
+    c = await make_client(base_url)
     r = await pw_login(c, "carol", next="/notes?note=1")
     assert r.json()["redirect_url"] == "/notes?note=1"
     assert (await c.get("/api/v1/me")).json()["username"] == "carol"

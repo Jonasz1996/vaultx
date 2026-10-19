@@ -5,7 +5,8 @@
 #   sudo /opt/vaultx/deploy/debian/update.sh phase-7/notes-ts9df7   # naar een andere branch
 #
 # Stappen: back-up van database en config, code ophalen, Python- en frontend-build,
-# systemd-unit en nginx-config vernieuwen (oude versie blijft als .bak), herstarten
+# systemd-unit en nginx-config vernieuwen (oude versie blijft als .bak), eenmalig een
+# zelfondertekend certificaat voor https op de container zelf (tls-cert.sh), herstarten
 # (de service migreert zelf) en controleren of /health/ready antwoordt.
 set -euo pipefail
 
@@ -65,6 +66,7 @@ main() {
   }
   replace deploy/debian/vaultx.service "$UNIT"
   systemctl daemon-reload
+  VAULTX_TLS_NO_RELOAD=1 bash deploy/debian/tls-cert.sh
   replace deploy/debian/nginx-vaultx.conf "$NGINX_SITE"
   if ! nginx -t; then
     [ -e "$NGINX_SITE.bak-$STAMP" ] && cp -a "$NGINX_SITE.bak-$STAMP" "$NGINX_SITE"

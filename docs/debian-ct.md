@@ -87,11 +87,36 @@ cp /opt/vaultx/deploy/debian/vaultx.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now vaultx
 curl http://127.0.0.1:8000/health
 
+/opt/vaultx/deploy/debian/tls-cert.sh       # zelfondertekend certificaat voor https op de container
 cp /opt/vaultx/deploy/debian/nginx-vaultx.conf /etc/nginx/sites-available/vaultx
 ln -s /etc/nginx/sites-available/vaultx /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 ```
+
+### Rechtstreeks via https op de container
+
+De webkluis versleutelt in de browser met WebCrypto, en dat geeft een browser enkel
+over https (op `localhost` na). Open je VaultX zonder NPM op het IP van de container,
+dan moet dat dus `https://<IP>` zijn; over `http://<IP>` toont VaultX "WebCrypto is
+niet beschikbaar". Daarom luistert de lokale nginx ook op poort 443 met een
+zelfondertekend certificaat:
+
+- `deploy/debian/tls-cert.sh` maakt het eenmalig aan in `/etc/vaultx/tls/`
+  (`vaultx.crt`, `vaultx.key`), 9999 dagen geldig, voor de hostnaam en alle
+  IP-adressen van de container. `update.sh` roept het bij elke update aan; een
+  bestaand certificaat blijft staan.
+- Kreeg de container een ander IP-adres: `/opt/vaultx/deploy/debian/tls-cert.sh --renew`.
+- Een eigen certificaat gebruiken: zet het als `vaultx.crt` en `vaultx.key` in
+  `/etc/vaultx/tls/`, dan raakt het script het niet aan.
+- De browser waarschuwt de eerste keer ("verbinding is niet privé"): kies
+  *Geavanceerd* en *Doorgaan naar ...*. Wil je de waarschuwing kwijt, importeer
+  `/etc/vaultx/tls/vaultx.crt` dan als vertrouwd certificaat op je eigen pc.
+- Poort 80 blijft zoals hij was, zonder redirect: NPM blijft daarop doorsturen en er
+  verandert niets in NPM of in `vaultx.env`. Inloggen met een wachtwoord werkt op
+  `https://<IP>` meteen; inloggen via Authentik enkel als dat adres in
+  `VAULTX_EXTRA_ORIGINS` en als redirect-URI in Authentik staat (zie
+  [authentik.md](authentik.md)).
 
 De service draait de migraties bij elke start (`ExecStartPre`), luistert enkel
 op 127.0.0.1 en is met systemd-hardening afgeschermd.
