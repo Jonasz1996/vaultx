@@ -55,7 +55,7 @@ export const api = {
   delete: (path: string) => request<void>("DELETE", path),
 };
 
-export function loginUrl(next = window.location.pathname + window.location.search): string {
+export function loginUrl(next = window.location.pathname + window.location.search + window.location.hash): string {
   return `/auth/login?next=${encodeURIComponent(next)}`;
 }
 

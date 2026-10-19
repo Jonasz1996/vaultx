@@ -6,7 +6,7 @@ from __future__ import annotations
 import hmac
 import logging
 import re
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -49,23 +49,56 @@ def safe_next(value: str | None) -> str:
     return value
 
 
-def _error_redirect(settings: Settings, code: str) -> RedirectResponse:
-    resp = RedirectResponse(f"{settings.public_url}/login?{urlencode({'error': code})}", status_code=303)
+def _error_redirect(code: str, next: str | None = None) -> RedirectResponse:
+    # Relatief: de browser blijft op het adres waarop hij VaultX opende.
+    query = {"error": code}
+    if next and next != "/":
+        query["next"] = next
+    resp = RedirectResponse(f"/login?{urlencode(query)}", status_code=303)
     resp.delete_cookie(STATE_COOKIE, path="/auth")
     return resp
 
 
+def _request_origin(request: Request) -> str:
+    """Origin zoals de browser hem ziet (Host via nginx, schema via X-Forwarded-Proto)."""
+    return f"{request.url.scheme}://{request.url.netloc}".lower()
+
+
+def _allowed_origin(request: Request, settings: Settings) -> str | None:
+    """Het origin van deze request als het in de configuratie staat; nooit blind de Host volgen."""
+    origin = _request_origin(request)
+    return origin if origin in settings.allowed_origins else None
+
+
 @router.get("/login", summary="Start login bij Authentik")
-async def login(settings: SettingsDep, oidc: OIDCDep, next: str | None = None) -> Response:
+async def login(request: Request, settings: SettingsDep, oidc: OIDCDep, next: str | None = None) -> Response:
+    next = safe_next(next)
+    origin = _allowed_origin(request, settings)
+    if origin is None:
+        if request.url.hostname != urlsplit(settings.public_url).hostname:
+            # Authentik stuurt enkel terug naar een geregistreerde redirect-URI, en de state-cookie
+            # moet op hetzelfde adres staan: start de login dan op het publieke adres.
+            log.info(
+                "Authentik-login op %s, dat niet in VAULTX_EXTRA_ORIGINS staat: via %s",
+                _request_origin(request),
+                settings.public_origin,
+            )
+            return RedirectResponse(
+                f"{settings.public_url}/auth/login?{urlencode({'next': next})}", status_code=303
+            )
+        origin = settings.public_origin  # zelfde host: de cookie hangt niet af van schema of poort
+    redirect_uri = f"{origin}/auth/callback"
     state, nonce, verifier = new_token(), new_token(), new_token(48)
     try:
-        url = await oidc.authorization_url(state=state, nonce=nonce, code_challenge=pkce_challenge(verifier))
+        url = await oidc.authorization_url(
+            state=state, nonce=nonce, code_challenge=pkce_challenge(verifier), redirect_uri=redirect_uri
+        )
     except OIDCError:
-        return _error_redirect(settings, "idp_unreachable")
+        return _error_redirect("idp_unreachable", next)
     resp = RedirectResponse(url, status_code=303)
     resp.set_cookie(
         STATE_COOKIE,
-        _serializer(settings).dumps({"s": state, "n": nonce, "v": verifier, "next": safe_next(next)}),
+        _serializer(settings).dumps({"s": state, "n": nonce, "v": verifier, "next": next, "r": redirect_uri}),
         max_age=STATE_MAX_AGE,
         path="/auth",
         httponly=True,
@@ -96,7 +129,7 @@ async def callback(
             details={"reason": reason, "detail": detail},
         )
         await db.commit()
-        return _error_redirect(settings, reason)
+        return _error_redirect(reason, saved["next"] if saved else None)
 
     raw = request.cookies.get(STATE_COOKIE)
     try:
@@ -107,7 +140,7 @@ async def callback(
         # Geen (geldige) state-cookie: deze browser startte geen login. Niet in de auditlog, anders
         # kan iedereen zonder login die (gehashte, append-only) log volschrijven.
         log.info("OIDC-callback zonder geldige state-cookie (error=%r)", (error or "")[:40])
-        return _error_redirect(settings, "idp_error" if error else "invalid_state")
+        return _error_redirect("idp_error" if error else "invalid_state")
     if error:
         # Enkel een OAuth-foutcode (bv. access_denied) bewaren, geen vrije tekst van de aanroeper.
         return await fail("idp_error", error if re.fullmatch(r"[a-z_]{1,40}", error) else "other")
@@ -115,7 +148,9 @@ async def callback(
         return await fail("invalid_state")
 
     try:
-        tokens = await oidc.exchange_code(code=code, code_verifier=saved["v"])
+        tokens = await oidc.exchange_code(
+            code=code, code_verifier=saved["v"], redirect_uri=saved.get("r") or settings.redirect_uri
+        )
         claims = await oidc.validate_id_token(tokens["id_token"], nonce=saved["n"])
         if "groups" not in claims and tokens.get("access_token"):
             # Sommige providers zetten groepen enkel in userinfo.
@@ -137,13 +172,14 @@ async def callback(
             await db.commit()
             break
         except PermissionDeniedError:
-            return _error_redirect(settings, "account_disabled")
+            return _error_redirect("account_disabled", saved["next"])
         except IntegrityError:
             await db.rollback()
             if attempt:
                 raise
 
-    resp = RedirectResponse(f"{settings.public_url}{saved['next']}", status_code=303)
+    # Terug naar de pagina waar de gebruiker stond, op hetzelfde adres (relatief).
+    resp = RedirectResponse(safe_next(saved["next"]), status_code=303)
     resp.delete_cookie(STATE_COOKIE, path="/auth")
     _session_cookie(resp, settings, token)
     return resp
@@ -188,7 +224,8 @@ async def password_login(
     user = await PasswordLoginService(db, settings).authenticate(data.login, data.password, meta)
     token, _ = await SessionService(db, settings).create(user, meta=meta, auth_method="password")
     await db.commit()
-    resp = JSONResponse({"redirect_url": f"{settings.public_url}{safe_next(data.next)}"})
+    # Relatief: wie VaultX op een ander adres opende, blijft daar (de cookie staat ook daar).
+    resp = JSONResponse({"redirect_url": safe_next(data.next)})
     _session_cookie(resp, settings, token)
     return resp
 
@@ -216,12 +253,13 @@ async def logout(
     if not password_session:
         # Wie met een wachtwoord inlogde, heeft geen Authentik-sessie om af te sluiten.
         try:
+            origin = _allowed_origin(request, settings) or settings.public_origin
             redirect = await oidc.end_session_url(
-                id_token_hint=id_token, post_logout_redirect_uri=f"{settings.public_url}/login?logged_out=1"
+                id_token_hint=id_token, post_logout_redirect_uri=f"{origin}/login?logged_out=1"
             )
         except OIDCError:
             redirect = None
-    resp = JSONResponse({"redirect_url": redirect or f"{settings.public_url}/login?logged_out=1"})
+    resp = JSONResponse({"redirect_url": redirect or "/login?logged_out=1"})
     resp.delete_cookie(settings.session_cookie_name, path="/")
     return resp
 

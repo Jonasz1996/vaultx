@@ -1,8 +1,10 @@
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import pytest
 
-from tests.conftest import PUBLIC_URL
+from app.core.config import Settings
+from tests.conftest import EXTRA_ORIGIN, PUBLIC_URL
 
 
 async def test_unauthenticated_api_is_401(make_client):
@@ -29,7 +31,7 @@ async def test_full_login_creates_user_session_and_audit(make_client):
     c = await make_client()
     r = await c.login("alice", groups=["vaultx-admins"], next="/organizations")
     assert r.status_code == 303
-    assert r.headers["location"] == f"{PUBLIC_URL}/organizations"
+    assert r.headers["location"] == "/organizations"
     me = (await c.get("/api/v1/me")).json()
     assert me["email"] == "alice@example.com"
     assert me["is_admin"] is True
@@ -42,7 +44,7 @@ async def test_full_login_creates_user_session_and_audit(make_client):
 async def test_open_redirect_is_blocked(make_client):
     c = await make_client()
     r = await c.login("bob", next="//evil.example.com/x")
-    assert r.headers["location"] == f"{PUBLIC_URL}/"
+    assert r.headers["location"] == "/"
 
 
 async def test_callback_with_wrong_state_is_rejected(make_client):
@@ -211,3 +213,53 @@ async def test_simultaneous_first_logins_both_succeed(make_client):
     assert ra.status_code == rb.status_code == 303, (ra.text, rb.text)
     for c in (a, b):
         assert (await c.get("/api/v1/me")).status_code == 200
+
+
+async def test_login_on_extra_origin_stays_there(make_client, fake_oidc):
+    c = await make_client(EXTRA_ORIGIN)
+    r = await c.get("/auth/login", params={"next": "/vault"})
+    q = parse_qs(urlsplit(r.headers["location"]).query)
+    assert q["redirect_uri"] == [f"{EXTRA_ORIGIN}/auth/callback"]
+    r = await c.login("frank", next="/notes?note=abc")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/notes?note=abc"
+    assert (await c.get("/api/v1/me")).json()["email"] == "frank@example.com"
+    out = (await c.post("/auth/logout", headers={"X-VaultX-CSRF": "1"})).json()["redirect_url"]
+    q = parse_qs(urlsplit(out).query)
+    assert q["post_logout_redirect_uri"] == [f"{EXTRA_ORIGIN}/login?logged_out=1"]
+
+
+async def test_login_on_unknown_origin_goes_via_public_url(make_client):
+    c = await make_client("http://192.168.1.50")
+    r = await c.get("/auth/login", params={"next": "/vault"})
+    assert r.status_code == 303
+    assert r.headers["location"] == f"{PUBLIC_URL}/auth/login?next=%2Fvault"
+    assert "vaultx_oidc" not in r.headers.get("set-cookie", "")
+
+
+async def test_host_header_is_not_trusted_for_redirect_uri(make_client):
+    c = await make_client()
+    r = await c.get("/auth/login", headers={"Host": "evil.example.com"})
+    assert r.headers["location"].startswith(f"{PUBLIC_URL}/auth/login")
+
+
+async def test_login_error_keeps_the_page(make_client):
+    c = await make_client()
+    await c.get("/auth/login", params={"next": "/vault"})
+    r = await c.get("/auth/callback", params={"error": "access_denied", "state": "x"})
+    assert r.headers["location"] == "/login?error=idp_error&next=%2Fvault"
+
+
+def test_extra_origins_are_validated():
+    base = {
+        "secret_key": "x" * 32,
+        "oidc_issuer": "https://a/",
+        "oidc_client_id": "c",
+        "oidc_client_secret": "s",
+    }
+    s = Settings(
+        **base, public_url="https://Vault.example.be/", extra_origins="https://a.lan/,http://10.0.0.5:8080"
+    )
+    assert s.allowed_origins == {"https://vault.example.be", "https://a.lan", "http://10.0.0.5:8080"}
+    with pytest.raises(ValueError):
+        Settings(**base, extra_origins="vaultx.lan")

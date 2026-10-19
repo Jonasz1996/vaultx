@@ -8,6 +8,17 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
+def _origin(url: str) -> str | None:
+    """scheme://host[:poort] in kleine letters, of None als het geen http(s)-adres is."""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return None
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="VAULTX_",
@@ -21,6 +32,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     # Publieke basis-URL zoals de browser VaultX ziet (achter NPM/nginx), zonder slash op het einde.
     public_url: str = "http://localhost:8080"
+    # Extra adressen (origins) waarop de webapp ook geopend wordt, bv. https://vaultx.lan of
+    # http://192.168.0.50, kommagescheiden. Inloggen met een wachtwoord werkt op elk adres; voor
+    # Authentik moet <origin>/auth/callback ook als redirect-URI in de provider staan.
+    extra_origins: Annotated[list[str], NoDecode] = []
     # Sleutel voor het ondertekenen van de korte OIDC-state cookie. Minstens 32 tekens.
     secret_key: SecretStr = Field(min_length=32)
 
@@ -116,6 +131,24 @@ class Settings(BaseSettings):
     def _strip_slash(cls, value: str) -> str:
         return value.rstrip("/")
 
+    @field_validator("extra_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = [o for o in value.split(",")]
+        if isinstance(value, list):
+            origins = []
+            for raw in value:
+                raw = str(raw).strip()
+                if not raw:
+                    continue
+                origin = _origin(raw)
+                if not origin:
+                    raise ValueError(f"VAULTX_EXTRA_ORIGINS: geen geldig adres: {raw!r}")
+                origins.append(origin)
+            return origins
+        return value
+
     @field_validator("authentik_api_url", "authentik_public_url")
     @classmethod
     def _strip_ak_url(cls, value: str | None) -> str | None:
@@ -161,6 +194,15 @@ class Settings(BaseSettings):
     @property
     def discovery_url(self) -> str:
         return f"{self.oidc_issuer.rstrip('/')}/.well-known/openid-configuration"
+
+    @property
+    def public_origin(self) -> str:
+        return _origin(self.public_url) or self.public_url
+
+    @property
+    def allowed_origins(self) -> set[str]:
+        """Origins waarop de webapp mag inloggen: het publieke adres plus VAULTX_EXTRA_ORIGINS."""
+        return {self.public_origin, *self.extra_origins}
 
     @property
     def redirect_uri(self) -> str:

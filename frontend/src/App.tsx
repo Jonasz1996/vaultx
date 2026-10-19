@@ -28,7 +28,7 @@ function RequireAuth() {
   const unauthenticated = error instanceof ApiError && error.status === 401;
   useEffect(() => {
     if (unauthenticated) {
-      const next = window.location.pathname + window.location.search;
+      const next = window.location.pathname + window.location.search + window.location.hash;
       window.location.replace(`/login?next=${encodeURIComponent(next)}`);
     }
   }, [unauthenticated]);

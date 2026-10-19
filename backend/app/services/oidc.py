@@ -105,12 +105,14 @@ class OIDCProvider:
 
     # ------------------------------------------------------------------ login flow
 
-    async def authorization_url(self, *, state: str, nonce: str, code_challenge: str) -> str:
+    async def authorization_url(
+        self, *, state: str, nonce: str, code_challenge: str, redirect_uri: str | None = None
+    ) -> str:
         meta = await self.metadata()
         params = {
             "response_type": "code",
             "client_id": self.settings.oidc_client_id,
-            "redirect_uri": self.settings.redirect_uri,
+            "redirect_uri": redirect_uri or self.settings.redirect_uri,
             "scope": self.settings.oidc_scopes,
             "state": state,
             "nonce": nonce,
@@ -119,7 +121,9 @@ class OIDCProvider:
         }
         return f"{meta['authorization_endpoint']}?{urlencode(params)}"
 
-    async def exchange_code(self, *, code: str, code_verifier: str) -> dict[str, Any]:
+    async def exchange_code(
+        self, *, code: str, code_verifier: str, redirect_uri: str | None = None
+    ) -> dict[str, Any]:
         meta = await self.metadata()
         try:
             resp = await self._http.post(
@@ -127,7 +131,7 @@ class OIDCProvider:
                 data={
                     "grant_type": "authorization_code",
                     "code": code,
-                    "redirect_uri": self.settings.redirect_uri,
+                    "redirect_uri": redirect_uri or self.settings.redirect_uri,
                     "code_verifier": code_verifier,
                 },
                 auth=(self.settings.oidc_client_id, self.settings.oidc_client_secret.get_secret_value()),

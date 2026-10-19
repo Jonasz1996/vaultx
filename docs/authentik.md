@@ -22,6 +22,13 @@ die is getest tegen Authentik 2026.8.3.
 | Logout method | **Back-channel** |
 | Include claims in id_token | aan |
 
+Open je VaultX ook op een ander adres (bv. `https://vaultx.lan` of
+`http://192.168.0.50`)? Inloggen met een VaultX-wachtwoord werkt daar zonder meer.
+Voor Authentik op dat adres zet je het in `VAULTX_EXTRA_ORIGINS` (kommagescheiden) en
+voeg je in de provider per adres een extra redirect-URI toe (Authorization, strict)
+`https://vaultx.lan/auth/callback` en (Logout, strict) `https://vaultx.lan/login?logged_out=1`.
+Staat een adres niet in die lijst, dan loopt een Authentik-login via `VAULTX_PUBLIC_URL`.
+
 Maak daarna een **Application** (slug bv. `vaultx`) met deze provider. De
 issuer staat op de provider-pagina, bv.
 `https://auth.jouwdomein.be/application/o/vaultx/`; neem hem exact over

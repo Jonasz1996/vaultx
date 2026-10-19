@@ -42,7 +42,7 @@ async def test_admin_creates_account_and_user_logs_in(admin, make_client):
     c = await make_client()
     r = await pw_login(c, "CAROL", next="/vault")
     assert r.status_code == 200, r.text
-    assert r.json()["redirect_url"] == "http://testserver/vault"
+    assert r.json()["redirect_url"] == "/vault"
     me = (await c.get("/api/v1/me")).json()
     assert me["username"] == "carol" and me["is_admin"] is False
     # Ook met het e-mailadres.
@@ -56,7 +56,7 @@ async def test_open_redirect_blocked(admin, make_client):
     await create(admin)
     c = await make_client()
     r = await pw_login(c, "carol", next="//evil.example.com/")
-    assert r.json()["redirect_url"] == "http://testserver/"
+    assert r.json()["redirect_url"] == "/"
 
 
 async def test_login_requires_csrf_header(admin, make_client):
@@ -270,7 +270,7 @@ async def test_logout_of_password_session_skips_authentik(admin, make_client):
     c = await make_client()
     await pw_login(c, "carol")
     r = await c.post("/auth/logout", headers={"X-VaultX-CSRF": "1"})
-    assert r.json()["redirect_url"] == "http://testserver/login?logged_out=1"
+    assert r.json()["redirect_url"] == "/login?logged_out=1"
     assert (await c.get("/api/v1/me")).status_code == 401
 
 
@@ -310,3 +310,14 @@ async def test_cli_create_and_reset(make_client):
         await cli.reset_password("niemand", "tweede-wachtwoord-123")
     with pytest.raises(VaultXError):
         await cli.create_user("root", "ander@example.com", None, False, "cli-wachtwoord-12345")
+
+
+async def test_password_login_works_on_any_address(admin, make_client):
+    # Ook op een adres dat niet in de configuratie staat: geen omweg via VAULTX_PUBLIC_URL.
+    await create(admin)
+    c = await make_client("http://192.168.1.50")
+    r = await pw_login(c, "carol", next="/notes?note=1")
+    assert r.json()["redirect_url"] == "/notes?note=1"
+    assert (await c.get("/api/v1/me")).json()["username"] == "carol"
+    r = await c.post("/auth/logout", headers={"X-VaultX-CSRF": "1"})
+    assert r.json()["redirect_url"] == "/login?logged_out=1"
