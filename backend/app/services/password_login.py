@@ -28,20 +28,11 @@ MAX_PASSWORD_LENGTH = 1024
 
 
 def check_password_policy(settings: Settings, password: str, user: User | None = None) -> None:
-    """Minimale lengte en niet gelijk aan de eigen gebruikersnaam of het e-mailadres."""
-    if len(password) < settings.password_min_length:
-        raise InvalidOperationError(
-            f"Het wachtwoord moet minstens {settings.password_min_length} tekens lang zijn"
-        )
+    """Geen eisen aan het wachtwoord, behalve dat het niet leeg mag zijn."""
+    if not password:
+        raise InvalidOperationError("Vul een wachtwoord in")
     if len(password) > MAX_PASSWORD_LENGTH:
         raise InvalidOperationError(f"Het wachtwoord mag hoogstens {MAX_PASSWORD_LENGTH} tekens lang zijn")
-    if user is not None and password.strip().lower() in {
-        (user.username or "").lower(),
-        (user.email or "").lower(),
-    }:
-        raise InvalidOperationError(
-            "Het wachtwoord mag niet gelijk zijn aan je gebruikersnaam of e-mailadres"
-        )
 
 
 def set_password(user: User, password: str) -> None:

@@ -3,7 +3,6 @@ import { ErrorBox } from "./ui";
 
 // Gebruikersnaam zoals de backend hem aanvaardt (USERNAME_PATTERN).
 const USERNAME_PATTERN = "[A-Za-z0-9][A-Za-z0-9._@+\\-]{1,149}";
-export const MIN_PASSWORD = 12;
 
 /** Willekeurig wachtwoord van 20 tekens, zonder tekens die je makkelijk verwart. */
 function generatePassword(): string {
@@ -35,7 +34,6 @@ function NewPasswordFields({
           <input
             required
             type={show ? "text" : "password"}
-            minLength={MIN_PASSWORD}
             autoComplete="new-password"
             value={value}
             onChange={(e) => onChange(e.target.value)}
@@ -58,7 +56,7 @@ function NewPasswordFields({
             </button>
           )}
         </div>
-        <small className="muted">Minstens {MIN_PASSWORD} tekens. Gebruik niet je master password van de kluis.</small>
+        <small className="muted">Gebruik niet je master password van de kluis.</small>
       </label>
       <label className="field">
         <span>Nogmaals</span>

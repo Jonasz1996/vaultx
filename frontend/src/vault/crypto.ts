@@ -293,13 +293,3 @@ export async function createVaultKeys(
     private_key: await encryptType2(pkcs8, userKey),
   };
 }
-
-/** Grove sterkte-indicatie; de echte bescherming is de lengte. */
-export function passwordProblems(pw: string, email: string): string[] {
-  const problems: string[] = [];
-  if (pw.length < 12) problems.push("minstens 12 tekens");
-  if (pw.trim() !== pw) problems.push("geen spaties vooraan of achteraan");
-  const local = email.split("@")[0].toLowerCase();
-  if (local.length >= 3 && pw.toLowerCase().includes(local)) problems.push("niet je gebruikersnaam of e-mailadres");
-  return problems;
-}

@@ -27,7 +27,7 @@ Authentik even niet bereikbaar is.
 ## Beveiliging
 
 - Wachtwoorden staan als Argon2id-hash in de database.
-- Minstens 12 tekens (VAULTX_PASSWORD_MIN_LENGTH), niet gelijk aan de gebruikersnaam of het e-mailadres.
+- Geen eisen aan het wachtwoord (lengte, tekens of gebruikersnaam); het mag alleen niet leeg zijn.
 - Na 5 foute wachtwoorden na elkaar (VAULTX_LOCAL_LOGIN_MAX_FAILED) is wachtwoordlogin voor dat
   account 15 minuten vergrendeld (VAULTX_LOCAL_LOGIN_LOCKOUT_MINUTES). Inloggen via Authentik blijft
   werken; een beheerder die het wachtwoord reset, heft de vergrendeling op.
