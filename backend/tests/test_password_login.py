@@ -126,15 +126,11 @@ async def test_deactivated_account_cannot_log_in(admin, make_client):
 
 
 async def test_password_policy_and_duplicates(admin):
-    r = await admin.post_json(
-        "/api/v1/users", {"username": "kort", "email": "k@example.com", "password": "kort"}
-    )
+    # Geen eisen aan het wachtwoord, behalve niet leeg.
+    r = await admin.post_json("/api/v1/users", {"username": "kort", "email": "k@example.com", "password": ""})
     assert r.status_code == 422
-    r = await admin.post_json(
-        "/api/v1/users",
-        {"username": "dave@example.com", "email": "dave@example.com", "password": "dave@example.com"},
-    )
-    assert r.status_code == 422
+    await create(admin, username="kort", email="k@example.com", password="kort")
+    await create(admin, username="dave", email="dave@example.com", password="Dave@example.com")
     await create(admin)
     # Gebruikersnaam of e-mail van een ander account (ook kruiselings) wordt geweigerd.
     for username, email in [
@@ -244,7 +240,7 @@ async def test_change_own_password(admin, make_client):
         "/api/v1/me/password", {"current_password": "fout", "new_password": "nieuw-wachtwoord-1"}
     )
     assert r.status_code == 422
-    r = await c.post_json("/api/v1/me/password", {"current_password": PW, "new_password": "kort"})
+    r = await c.post_json("/api/v1/me/password", {"current_password": PW, "new_password": ""})
     assert r.status_code == 422
     r = await c.post_json(
         "/api/v1/me/password", {"current_password": PW, "new_password": "nieuw-wachtwoord-1"}

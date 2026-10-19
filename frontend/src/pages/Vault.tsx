@@ -10,7 +10,6 @@ import {
   changeMasterPassword,
   createVaultKeys,
   deriveLogin,
-  passwordProblems,
   PBKDF2_ITERATIONS,
 } from "../vault/crypto";
 
@@ -40,7 +39,6 @@ function Enroll({ s, onDone }: { s: VaultStatus; onDone: () => void }) {
   const [confirmPw, setConfirmPw] = useState("");
   const [understood, setUnderstood] = useState(false);
   const email = s.email ?? "";
-  const problems = password ? passwordProblems(password, email) : [];
   const mismatch = confirmPw.length > 0 && confirmPw !== password;
 
   const enroll = useMutation({
@@ -54,7 +52,7 @@ function Enroll({ s, onDone }: { s: VaultStatus; onDone: () => void }) {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (problems.length || mismatch || !understood) return;
+    if (mismatch || !understood) return;
     enroll.mutate();
   };
 
@@ -86,7 +84,6 @@ function Enroll({ s, onDone }: { s: VaultStatus; onDone: () => void }) {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          {problems.length > 0 && <span className="muted small">Nog nodig: {problems.join(", ")}</span>}
         </label>
         <label className="field">
           <span>Herhaal master password</span>
@@ -107,7 +104,7 @@ function Enroll({ s, onDone }: { s: VaultStatus; onDone: () => void }) {
         <div className="form-actions">
           <button
             className="btn btn-primary"
-            disabled={enroll.isPending || !password || problems.length > 0 || mismatch || !confirmPw || !understood}
+            disabled={enroll.isPending || !password || mismatch || !confirmPw || !understood}
           >
             {enroll.isPending ? "Sleutels afleiden…" : "Kluis activeren"}
           </button>
@@ -427,8 +424,6 @@ function ChangePassword({ s, onDone }: { s: VaultStatus; onDone: () => void }) {
   const [confirmPw, setConfirmPw] = useState("");
   const [kdf, setKdf] = useState<number>(s.kdf ?? 0);
   const [done, setDone] = useState(false);
-  const email = s.email ?? "";
-  const problems = password ? passwordProblems(password, email) : [];
   const mismatch = confirmPw.length > 0 && confirmPw !== password;
 
   const change = useMutation({
@@ -459,7 +454,7 @@ function ChangePassword({ s, onDone }: { s: VaultStatus; onDone: () => void }) {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (problems.length || mismatch || !current) return;
+    if (mismatch || !current) return;
     setDone(false);
     change.mutate();
   };
@@ -491,7 +486,6 @@ function ChangePassword({ s, onDone }: { s: VaultStatus; onDone: () => void }) {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          {problems.length > 0 && <span className="muted small">Nog nodig: {problems.join(", ")}</span>}
         </label>
         <label className="field">
           <span>Herhaal nieuw master password</span>
@@ -518,7 +512,7 @@ function ChangePassword({ s, onDone }: { s: VaultStatus; onDone: () => void }) {
         <div className="form-actions">
           <button
             className="btn btn-primary"
-            disabled={change.isPending || !current || !password || problems.length > 0 || mismatch || !confirmPw}
+            disabled={change.isPending || !current || !password || mismatch || !confirmPw}
           >
             {change.isPending ? "Sleutels afleiden…" : "Wijzigen en alle apparaten afmelden"}
           </button>
