@@ -26,6 +26,8 @@ TEST_DB = os.environ.get(
     "VAULTX_TEST_DATABASE_URL", "postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_test"
 )
 PUBLIC_URL = "http://testserver"
+# Tweede adres waarop de webapp ook mag inloggen (VAULTX_EXTRA_ORIGINS).
+EXTRA_ORIGIN = "http://vaultx.lan:8080"
 
 FAKE = FakeOIDCProvider()
 FAKE.start()
@@ -35,6 +37,7 @@ os.environ.update(
         "VAULTX_DATABASE_URL": TEST_DB,
         "VAULTX_SECRET_KEY": "test-secret-key-test-secret-key-0123456789",
         "VAULTX_PUBLIC_URL": PUBLIC_URL,
+        "VAULTX_EXTRA_ORIGINS": "HTTP://VaultX.lan:8080/ ,",
         "VAULTX_OIDC_ISSUER": FAKE.issuer,
         "VAULTX_OIDC_CLIENT_ID": FAKE.client_id,
         "VAULTX_OIDC_CLIENT_SECRET": FAKE.client_secret,
@@ -162,8 +165,8 @@ class VaultXClient(httpx.AsyncClient):
 async def make_client(app):
     clients: list[VaultXClient] = []
 
-    async def factory() -> VaultXClient:
-        c = VaultXClient(transport=httpx.ASGITransport(app=app), base_url=PUBLIC_URL)
+    async def factory(base_url: str = PUBLIC_URL) -> VaultXClient:
+        c = VaultXClient(transport=httpx.ASGITransport(app=app), base_url=base_url)
         c.fake = FAKE
         clients.append(c)
         return c

@@ -22,6 +22,20 @@ die is getest tegen Authentik 2026.8.3.
 | Logout method | **Back-channel** |
 | Include claims in id_token | aan |
 
+Open je VaultX ook op een ander adres (bv. `https://vaultx.lan` of
+`http://192.168.0.50`)? Inloggen met een VaultX-wachtwoord werkt daar zonder meer.
+Voor Authentik op dat adres zet je het in `VAULTX_EXTRA_ORIGINS` (kommagescheiden) en
+voeg je in de provider per adres een extra redirect-URI toe (Authorization, strict)
+`https://vaultx.lan/auth/callback` en (Logout, strict) `https://vaultx.lan/login?logged_out=1`.
+Op een adres dat niet in die lijst staat, verbergt de loginpagina de Authentik-knop; VaultX
+springt nooit vanzelf naar `VAULTX_PUBLIC_URL`. De loginpagina en de wachtwoordlogin hebben
+Authentik en NPM niet nodig, dus inloggen via het LAN-IP werkt ook als die plat liggen.
+
+Over http (zonder NPM ervoor, bv. `http://192.168.0.50`) zet VaultX de sessiecookie zonder
+Secure-vlag, anders bewaart de browser hem niet. Dat gebeurt enkel voor privé- en loopback-IP's
+en voor http-adressen in `VAULTX_EXTRA_ORIGINS`; een domeinnaam over http krijgt altijd een
+Secure-cookie. Wachtwoord en sessie gaan dan wel onversleuteld over je LAN.
+
 Maak daarna een **Application** (slug bv. `vaultx`) met deze provider. De
 issuer staat op de provider-pagina, bv.
 `https://auth.jouwdomein.be/application/o/vaultx/`; neem hem exact over

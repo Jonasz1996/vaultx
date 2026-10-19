@@ -55,8 +55,9 @@ export const api = {
   delete: (path: string) => request<void>("DELETE", path),
 };
 
-export function loginUrl(next = window.location.pathname + window.location.search): string {
-  return `/auth/login?next=${encodeURIComponent(next)}`;
+/** Loginpagina (wachtwoord of Authentik), daarna terug naar `next`. */
+export function loginUrl(next = window.location.pathname + window.location.search + window.location.hash): string {
+  return `/login?next=${encodeURIComponent(next)}`;
 }
 
 export async function logout(): Promise<void> {
