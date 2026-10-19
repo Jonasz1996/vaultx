@@ -11,6 +11,11 @@ is aangemeld, komt meteen in de app), **fase 6** (app publiceren), **fase 7**
 gewoon account, naast Authentik) en **fase 9** (wat de Bitwarden-apps nog
 misten tegenover Bitwarden en Vaultwarden).
 
+**Webkluis**
+
+- Je items bekijken en bewerken op Mijn kluis, zoals de webkluis van Vaultwarden: zoeken, mappen, favorieten, logins, notities, kaarten en identiteiten, wachtwoordgenerator, live TOTP-codes, eigen velden, bijlagen en prullenbak
+- Alles wordt in de browser ont- en versleuteld, in hetzelfde formaat als de Bitwarden-apps; tweestapsverificatie en de apparatenlijst gelden ook hier. Zie [docs/bitwarden.md](docs/bitwarden.md#webkluis-in-vaultx)
+
 **Fase 9**
 
 - Importeren vanuit de Bitwarden-apps en `bw import` (bv. je Vaultwarden-export), met mappen

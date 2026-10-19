@@ -203,10 +203,12 @@ def main() -> None:
             pw_inputs.nth(1).fill(PASSWORD)
             page.get_by_label("Ik begrijp dat niemand").check()
             page.get_by_role("button", name="Kluis activeren").click()
-            expect(page.get_by_text("Verbinden met een Bitwarden-app")).to_be_visible(timeout=30_000)
+            tabs = page.get_by_role("link", name="Apps, apparaten en beveiliging")
+            expect(tabs).to_be_visible(timeout=30_000)
 
             step("Notities: fout wachtwoord geweigerd, juist wachtwoord ontgrendelt")
             page.get_by_role("link", name="Notities").click()
+            expect(page.get_by_role("heading", name="Notities")).to_be_visible()
             expect(page.get_by_role("heading", name="Kluis ontgrendelen")).to_be_visible()
             page.locator("input[type=password]").fill("verkeerd wachtwoord")
             page.get_by_role("button", name="Ontgrendelen").click()
