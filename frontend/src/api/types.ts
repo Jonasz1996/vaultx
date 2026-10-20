@@ -459,8 +459,32 @@ export interface VaultStatus {
   note_count: number;
   two_factor_enabled: boolean;
   two_factor_enabled_at: string | null;
+  authenticator_enabled: boolean;
+  security_keys: SecurityKey[];
+  /** False als VaultX geen domeinnaam heeft (enkel een IP-adres). */
+  security_keys_available: boolean;
+  security_keys_rp_id: string | null;
   devices: VaultDevice[];
 }
+
+/** Beveiligingssleutel of passkey (WebAuthn) als tweede stap. */
+export interface SecurityKey {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  backed_up: boolean;
+}
+
+export interface LoginKeyStatus {
+  available: boolean;
+  rp_id: string | null;
+  has_password: boolean;
+  keys: SecurityKey[];
+}
+
+/** Opties voor navigator.credentials.create/get, met base64url-velden. */
+export type WebAuthnOptions = Record<string, unknown>;
 
 // ---------------------------------------------------------------- notities (fase 7)
 

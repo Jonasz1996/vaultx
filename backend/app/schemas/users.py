@@ -1,9 +1,11 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from app.schemas.common import ORMModel
+from app.schemas.vault import SecurityKeyOut
 
 
 class UserOut(ORMModel):
@@ -115,3 +117,22 @@ class SessionOut(ORMModel):
 class MeOut(UserOut):
     memberships: list[MembershipBrief]
     auth_method: str
+
+
+class LoginKeyStatus(BaseModel):
+    """Beveiligingssleutels als tweede stap na het VaultX-wachtwoord."""
+
+    available: bool
+    rp_id: str | None = None
+    has_password: bool
+    keys: list[SecurityKeyOut] = []
+
+
+class LoginKeyStart(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class LoginKeyRemove(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+    security_key: dict[str, Any] | None = None
+    recovery_code: str | None = Field(default=None, max_length=64)

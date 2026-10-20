@@ -19,15 +19,22 @@ export class VaultApiError extends Error {
   }
 }
 
-/** De server vraagt een code van de authenticator-app (tweestapsverificatie van de kluis). */
+/** De server vraagt een tweede stap (tweestapsverificatie van de kluis). `securityKey` bevat de
+ * opties voor een beveiligingssleutel als de kluis er een heeft (Bitwarden-provider 7). */
 export class TwoFactorRequired extends Error {
-  constructor() {
-    super("Geef de code uit je authenticator-app.");
+  constructor(
+    public authenticator: boolean,
+    public securityKey: Record<string, unknown> | null,
+  ) {
+    super("Bevestig met je tweede stap.");
   }
 }
 
 export interface TwoFactorAnswer {
-  code: string;
+  /** Code uit de authenticator-app of de herstelcode. */
+  code?: string;
+  /** Antwoord van navigator.credentials.get. */
+  securityKey?: Record<string, unknown>;
   remember: boolean;
 }
 
@@ -126,7 +133,9 @@ async function tokenRequest(form: Record<string, string>): Promise<Record<string
   });
   const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (res.ok) return data;
-  if (data.TwoFactorProviders2 || data.twoFactorProviders2) throw new TwoFactorRequired();
+  const providers = (data.TwoFactorProviders2 ?? data.twoFactorProviders2) as Record<string, unknown> | undefined;
+  if (providers)
+    throw new TwoFactorRequired("0" in providers, (providers["7"] as Record<string, unknown> | null) ?? null);
   throw new VaultApiError(res.status, errorMessage(data, res.statusText));
 }
 
@@ -171,10 +180,18 @@ export function WebVaultProvider({ children }: { children: ReactNode }) {
         deviceName: `VaultX-webkluis (${device.name})`,
       };
       const remembered = rememberedToken(email);
-      if (twoFactor) {
+      if (twoFactor?.securityKey) {
         Object.assign(form, {
-          twoFactorToken: twoFactor.code.replace(/\s+/g, ""),
-          twoFactorProvider: "0",
+          twoFactorToken: JSON.stringify(twoFactor.securityKey),
+          twoFactorProvider: "7",
+          twoFactorRemember: twoFactor.remember ? "1" : "0",
+        });
+      } else if (twoFactor?.code) {
+        const code = twoFactor.code.replace(/\s+/g, "");
+        Object.assign(form, {
+          twoFactorToken: code,
+          // Zes cijfers: authenticator-app; iets langers: de herstelcode.
+          twoFactorProvider: /^\d{6,8}$/.test(code) ? "0" : "8",
           twoFactorRemember: twoFactor.remember ? "1" : "0",
         });
       } else if (remembered) {

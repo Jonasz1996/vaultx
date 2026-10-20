@@ -313,6 +313,10 @@ jobs:
         env:
           VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
         run: python e2e/web_vault_e2e.py notes-shots/webkluis
+      - name: YubiKey en passkeys in Chromium (virtuele FIDO2-sleutel, Bitwarden-connector)
+        env:
+          VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
+        run: python e2e/webauthn_e2e.py notes-shots/webauthn
       - name: Links in Chromium (Linkwarden-import, collecties, zoeken, archieven)
         env:
           VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e

@@ -177,7 +177,45 @@ slaat een apparaat dat 30 dagen over. De CLI: `bw login <e-mail> --method 0 --co
 
 Dit geldt voor de Bitwarden-apps, extensies, CLI en de webkluis op Mijn kluis. Voor
 de VaultX-webinterface zelf beschermt Authentik je login (en voor gewone accounts
-het VaultX-wachtwoord).
+het VaultX-wachtwoord, eventueel met een beveiligingssleutel: zie docs/accounts.md).
+
+### YubiKey, andere FIDO2-sleutels en passkeys (WebAuthn)
+
+Naast (of in plaats van) de authenticator-app: op **Mijn kluis → Tweestapsverificatie →
+Sleutel of passkey toevoegen**, een naam en je master password invullen en de sleutel
+aanraken. Dat kan een YubiKey zijn (USB of NFC), een andere FIDO2-sleutel, of een passkey
+(Windows Hello, je telefoon, een passkey-manager). Je kan er meerdere koppelen; koppel bij
+voorkeur een tweede sleutel als reserve. De eerste tweede stap (sleutel of app) geeft de
+herstelcode; er komt geen nieuwe als je er later iets bij zet.
+
+- **Bitwarden-extensie** (Edge, Chrome, Firefox): na het master password kiest de extensie
+  zelf "Beveiligingssleutel" en opent een tabblad op VaultX
+  (`/webauthn-fallback-connector.html`). Klik daar op *Beveiligingssleutel gebruiken*, raak
+  je YubiKey aan, en de extensie gaat verder. *Dit apparaat 30 dagen onthouden* werkt zoals
+  bij de code. Via *Andere methode gebruiken* kan je ook de code uit de app of de
+  herstelcode geven.
+- **Webkluis** op Mijn kluis: na het master password vraagt de browser om de sleutel.
+- **Mobiele apps** gebruiken `/webauthn-mobile-connector.html` (in de browser van je
+  telefoon, NFC-YubiKey of passkey). Nog niet getest met de echte apps; de authenticator-app
+  blijft daar de zekere keuze.
+- **CLI** (`bw`): kent geen beveiligingssleutels; gebruik daar de authenticator-app of
+  log in met de herstelcode.
+
+**Enkel op de domeinnaam.** Een sleutel hoort bij een domein: standaard de host van
+`VAULTX_PUBLIC_URL` (bv. `vaultx.jbogaert.be`), of `VAULTX_WEBAUTHN_RP_ID` als je die zet
+(bv. `jbogaert.be` voor alle subdomeinen; doe dat vóór je sleutels koppelt, anders werken
+ze niet meer). Open je VaultX via het IP-adres van de CT, dan kan de browser de sleutel
+niet gebruiken; gebruik daar de code uit de app of de herstelcode. Zet de Bitwarden-apps
+daarom op `https://vaultx.jbogaert.be` als server-URL.
+
+Weghalen kan per sleutel, met je master password plus een bewijs dat je je tweede stap
+nog hebt: een gekoppelde sleutel, de code uit de app of de herstelcode. Haal je de
+laatste weg, dan staat tweestapsverificatie uit. Herstelcode gebruiken, de beheerder
+(`DELETE /api/v1/users/{id}/vault-2fa`) of `app.cli reset-vault-2fa` halen ook alle
+sleutels weg. Foute antwoorden van een sleutel tellen mee voor de vergrendeling.
+
+VaultX bewaart per sleutel enkel de publieke sleutel en de teller. Elke challenge is
+ondertekend met `VAULTX_SECRET_KEY`, geldt 5 minuten en werkt maar één keer.
 
 ## Master password wijzigen (fase 9)
 
@@ -235,7 +273,8 @@ Bewust nog niet gebouwd, in deze volgorde voorgesteld:
 2. **Organisaties en collecties** (gedeelde kluizen per VaultX-organisatie en -team),
    daarna **noodtoegang**.
 3. **API-sleutel** voor de CLI (`bw login --apikey`), sleutelrotatie van de user key.
-4. Tweestapsverificatie via e-mail, WebAuthn/YubiKey of Duo.
+4. Tweestapsverificatie via e-mail, Duo of Yubico OTP (die laatste vraagt de cloud-API van
+   Yubico; een YubiKey werkt wel als FIDO2-sleutel, zie hierboven).
 5. Live meldingen op iPhone en Android (vereist de pushrelay van Bitwarden).
 6. Bitwarden-**v2-accounts** (COSE, signing keys, security state): het datamodel
    heeft er al een kolom voor, de endpoints nog niet.

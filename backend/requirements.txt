@@ -13,3 +13,4 @@ itsdangerous>=2.2,<3
 python-multipart>=0.0.20
 argon2-cffi>=25.1,<26
 msgpack>=1.1,<2
+webauthn>=3.0,<4

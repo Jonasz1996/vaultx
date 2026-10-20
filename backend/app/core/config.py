@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # http://192.168.0.50, kommagescheiden. Inloggen met een wachtwoord werkt op elk adres; voor
     # Authentik moet <origin>/auth/callback ook als redirect-URI in de provider staan.
     extra_origins: Annotated[list[str], NoDecode] = []
+    # Beveiligingssleutels en passkeys (WebAuthn) horen bij een domeinnaam. Leeg = de host van
+    # VAULTX_PUBLIC_URL. Werkt enkel op die naam (en subdomeinen), nooit op een IP-adres.
+    webauthn_rp_id: str | None = None
     # Sleutel voor het ondertekenen van de korte OIDC-state cookie. Minstens 32 tekens.
     secret_key: SecretStr = Field(min_length=32)
 

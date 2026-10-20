@@ -3,7 +3,7 @@ import qrcode from "qrcode-generator";
 import { useEffect, useState, type FormEvent } from "react";
 import { NavLink } from "react-router";
 import { api } from "../api/client";
-import type { VaultStatus } from "../api/types";
+import type { VaultStatus, WebAuthnOptions } from "../api/types";
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, Stat } from "../components/ui";
 import { formatDate, relative } from "../format";
 import { WebVault } from "./VaultItems";
@@ -14,6 +14,7 @@ import {
   deriveLogin,
   PBKDF2_ITERATIONS,
 } from "../vault/crypto";
+import { createCredential, getAssertion, webAuthnSupported } from "../webauthn";
 
 const BASE = "/api/v1/me/vault";
 
@@ -313,11 +314,250 @@ function qrDataUrl(text: string): string {
   return qr.createDataURL(5, 2);
 }
 
+/** Bewijs dat je je tweede stap hebt, voor je er iets aan weghaalt: een gekoppelde sleutel,
+ * een code uit de app of de herstelcode. */
+type Proof = { code?: string; security_key?: Record<string, unknown> };
+
+function useProof(s: VaultStatus) {
+  return async (code: string): Promise<Proof> => {
+    if (code.trim()) return { code: code.trim() };
+    if (!s.security_keys.length || !webAuthnSupported())
+      throw new Error("Vul een code uit je authenticator-app of je herstelcode in.");
+    const { options } = await api.post<{ options: WebAuthnOptions | null }>(`${BASE}/2fa/challenge`);
+    if (!options)
+      throw new Error("Je sleutel werkt hier niet (geen domeinnaam). Vul een code of je herstelcode in.");
+    return { security_key: await getAssertion(options) };
+  };
+}
+
 function TwoFactor({ s, onChange }: { s: VaultStatus; onChange: () => void }) {
+  const [recovery, setRecovery] = useState<string | null>(null);
+  const showRecovery = (code: string | null | undefined) => code && setRecovery(code);
+
+  return (
+    <Card
+      title="Tweestapsverificatie"
+      actions={s.two_factor_enabled ? <Badge tone="good">aan</Badge> : <Badge>uit</Badge>}
+    >
+      {recovery && (
+        <div className="info-box">
+          <p>
+            <b>Bewaar deze herstelcode</b> (op papier of buiten deze kluis). Ben je je telefoon of sleutel kwijt, dan
+            log je daarmee toch in; tweestapsverificatie gaat dan uit. Je ziet hem maar één keer.
+          </p>
+          <code className="mono recovery-code">{recovery}</code>
+        </div>
+      )}
+      <p className="muted small">
+        {s.two_factor_enabled
+          ? `Aan sinds ${formatDate(s.two_factor_enabled_at)}. `
+          : "Wie je master password kent, kan dan nog niet in je kluis zonder je telefoon of sleutel. "}
+        Geldt voor de Bitwarden-apps, extensies, CLI en de webkluis hier; met "Onthoud mij" slaat een apparaat de
+        tweede stap 30 dagen over.
+      </p>
+      <SecurityKeys s={s} onChange={onChange} onRecovery={showRecovery} />
+      <Authenticator s={s} onChange={onChange} onRecovery={showRecovery} />
+      {s.two_factor_enabled && <DisableAll s={s} onChange={() => (setRecovery(null), onChange())} />}
+    </Card>
+  );
+}
+
+function SecurityKeys({
+  s,
+  onChange,
+  onRecovery,
+}: {
+  s: VaultStatus;
+  onChange: () => void;
+  onRecovery: (code: string | null | undefined) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("YubiKey");
+  const [password, setPassword] = useState("");
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const proof = useProof(s);
+  const supported = webAuthnSupported();
+
+  const add = useMutation({
+    mutationFn: async () => {
+      const { loginHash } = await deriveLogin(unlockParams(s), password);
+      const { options } = await api.post<{ options: WebAuthnOptions }>(`${BASE}/2fa/security-keys/options`, {
+        master_password_hash: loginHash,
+      });
+      const credential = await createCredential(options);
+      return api.post<{ recovery_code: string | null }>(`${BASE}/2fa/security-keys`, { name, credential });
+    },
+    onSuccess: (data) => {
+      setPassword("");
+      setAdding(false);
+      onRecovery(data.recovery_code);
+      onChange();
+    },
+  });
+  const remove = useMutation({
+    mutationFn: async (id: string) => {
+      const { loginHash } = await deriveLogin(unlockParams(s), password);
+      return api.post(`${BASE}/2fa/security-keys/${id}/remove`, {
+        master_password_hash: loginHash,
+        ...(await proof(code)),
+      });
+    },
+    onSuccess: () => {
+      setPassword("");
+      setCode("");
+      setRemoving(null);
+      onChange();
+    },
+  });
+
+  return (
+    <div className="twofactor-section">
+      <h3>Beveiligingssleutels en passkeys</h3>
+      <p className="muted small">
+        YubiKey of een andere FIDO2-sleutel, of een passkey (Windows Hello, je telefoon). Werkt enkel op{" "}
+        <b>{s.security_keys_rp_id ?? "een domeinnaam"}</b>, niet als je VaultX via een IP-adres opent; daar gebruik je
+        de authenticator-app of je herstelcode.
+      </p>
+      {!s.security_keys_available && (
+        <div className="error-box small">
+          VaultX heeft geen domeinnaam (VAULTX_PUBLIC_URL is een IP-adres), dus sleutels kunnen hier niet.
+        </div>
+      )}
+      {s.security_keys.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Naam</th>
+                <th>Gekoppeld</th>
+                <th>Laatst gebruikt</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {s.security_keys.map((k) => (
+                <tr key={k.id}>
+                  <td>
+                    {k.name} {k.backed_up && <Badge>passkey</Badge>}
+                  </td>
+                  <td>{formatDate(k.created_at)}</td>
+                  <td>{k.last_used_at ? relative(k.last_used_at) : "nog niet"}</td>
+                  <td className="right">
+                    <button
+                      className="btn btn-ghost btn-danger-text"
+                      onClick={() => (setRemoving(removing === k.id ? null : k.id), setAdding(false))}
+                    >
+                      Weghalen
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {removing && (
+        <form
+          className="form"
+          style={{ maxWidth: 520 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            remove.mutate(removing);
+          }}
+        >
+          <p className="muted small">
+            Bevestig met je master password en een gekoppelde sleutel. Laat je de code leeg, dan vraagt je browser om
+            een sleutel aan te raken.
+          </p>
+          <MasterField value={password} onChange={setPassword} />
+          <label className="field">
+            <span>Of: code uit de app of herstelcode</span>
+            <input autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} />
+          </label>
+          <ErrorBox error={remove.error} />
+          <div className="form-actions">
+            <button className="btn btn-danger" disabled={remove.isPending || !password}>
+              {remove.isPending ? "Controleren…" : "Sleutel weghalen"}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => setRemoving(null)}>
+              Annuleren
+            </button>
+          </div>
+        </form>
+      )}
+      {adding ? (
+        <form
+          className="form"
+          style={{ maxWidth: 520 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            add.mutate();
+          }}
+        >
+          <label className="field">
+            <span>Naam (om de sleutel later te herkennen)</span>
+            <input required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <MasterField value={password} onChange={setPassword} />
+          <p className="muted small">Na "Koppelen" vraagt je browser om de sleutel in te steken en aan te raken.</p>
+          <ErrorBox error={add.error} />
+          <div className="form-actions">
+            <button className="btn btn-primary" disabled={add.isPending || !password || !name.trim()}>
+              {add.isPending ? "Wachten op je sleutel…" : "Koppelen"}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => setAdding(false)}>
+              Annuleren
+            </button>
+          </div>
+        </form>
+      ) : (
+        !removing && (
+          <div className="form-actions">
+            <button
+              className="btn"
+              disabled={!s.security_keys_available || !supported}
+              title={supported ? undefined : "Deze browser ondersteunt geen beveiligingssleutels"}
+              onClick={() => setAdding(true)}
+            >
+              Sleutel of passkey toevoegen
+            </button>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+function MasterField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="field">
+      <span>Master password</span>
+      <input
+        type="password"
+        autoComplete="current-password"
+        required
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
+}
+
+function Authenticator({
+  s,
+  onChange,
+  onRecovery,
+}: {
+  s: VaultStatus;
+  onChange: () => void;
+  onRecovery: (code: string | null | undefined) => void;
+}) {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [setup, setSetup] = useState<{ secret: string; otpauth_uri: string } | null>(null);
-  const [recovery, setRecovery] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const proof = useProof(s);
 
   const start = useMutation({
     mutationFn: async () => {
@@ -330,79 +570,72 @@ function TwoFactor({ s, onChange }: { s: VaultStatus; onChange: () => void }) {
     },
   });
   const enable = useMutation({
-    mutationFn: () => api.post<{ recovery_code: string }>(`${BASE}/2fa/enable`, { code }),
+    mutationFn: () => api.post<{ recovery_code: string | null }>(`${BASE}/2fa/enable`, { code }),
     onSuccess: (data) => {
       setCode("");
       setSetup(null);
-      setRecovery(data.recovery_code);
+      onRecovery(data.recovery_code);
       onChange();
     },
   });
-  const disable = useMutation({
+  const remove = useMutation({
     mutationFn: async () => {
       const { loginHash } = await deriveLogin(unlockParams(s), password);
-      return api.post(`${BASE}/2fa/disable`, { master_password_hash: loginHash, code });
+      return api.post(`${BASE}/2fa/authenticator/remove`, { master_password_hash: loginHash, ...(await proof(code)) });
     },
     onSuccess: () => {
       setPassword("");
       setCode("");
-      setRecovery(null);
+      setRemoving(false);
       onChange();
     },
   });
 
-  const passwordField = (
-    <label className="field">
-      <span>Master password</span>
-      <input
-        type="password"
-        autoComplete="current-password"
-        required
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-      />
-    </label>
-  );
-
   return (
-    <Card
-      title="Tweestapsverificatie"
-      actions={s.two_factor_enabled ? <Badge tone="good">aan</Badge> : <Badge>uit</Badge>}
-    >
-      {recovery && (
-        <div className="info-box">
-          <p>
-            <b>Bewaar deze herstelcode</b> (op papier of buiten deze kluis). Ben je je telefoon kwijt, dan log je
-            daarmee toch in; tweestapsverificatie gaat dan uit. Je ziet hem maar één keer.
-          </p>
-          <code className="mono recovery-code">{recovery}</code>
-        </div>
-      )}
-      {s.two_factor_enabled ? (
-        <form
-          className="form"
-          style={{ maxWidth: 520 }}
-          onSubmit={(e) => {
-            e.preventDefault();
-            disable.mutate();
-          }}
-        >
-          <p className="muted small">
-            Aan sinds {formatDate(s.two_factor_enabled_at)}. De Bitwarden-apps vragen na je master password een code
-            uit je authenticator-app; met "Onthoud mij" slaat een apparaat dat 30 dagen over.
-          </p>
-          {passwordField}
-          <label className="field">
-            <span>Code uit de app of herstelcode</span>
-            <input autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} />
-          </label>
-          <ErrorBox error={disable.error} />
+    <div className="twofactor-section">
+      <h3>
+        Authenticator-app {s.authenticator_enabled ? <Badge tone="good">gekoppeld</Badge> : null}
+      </h3>
+      {s.authenticator_enabled ? (
+        removing ? (
+          <form
+            className="form"
+            style={{ maxWidth: 520 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              remove.mutate();
+            }}
+          >
+            <MasterField value={password} onChange={setPassword} />
+            <label className="field">
+              <span>
+                Code uit de app of herstelcode{s.security_keys.length ? " (leeg: bevestigen met je sleutel)" : ""}
+              </span>
+              <input autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} />
+            </label>
+            <ErrorBox error={remove.error} />
+            <div className="form-actions">
+              <button
+                className="btn btn-danger"
+                disabled={remove.isPending || !password || (!code && !s.security_keys.length)}
+              >
+                {remove.isPending ? "Controleren…" : "App weghalen"}
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => setRemoving(false)}>
+                Annuleren
+              </button>
+            </div>
+          </form>
+        ) : (
           <div className="form-actions">
-            <button className="btn btn-danger" disabled={disable.isPending || !password || !code}>
-              {disable.isPending ? "Controleren…" : "Tweestapsverificatie uitzetten"}
+            <p className="muted small" style={{ margin: 0 }}>
+              De apps vragen een code uit je authenticator-app.
+            </p>
+            <button className="btn btn-ghost btn-danger-text" onClick={() => setRemoving(true)}>
+              Weghalen
             </button>
           </div>
-        </form>
+        )
       ) : setup ? (
         <form
           className="form"
@@ -449,20 +682,72 @@ function TwoFactor({ s, onChange }: { s: VaultStatus; onChange: () => void }) {
             start.mutate();
           }}
         >
-          <p className="muted small">
-            Wie je master password kent, kan dan nog niet inloggen in de Bitwarden-apps zonder je telefoon. Geldt voor
-            de apps, extensies en CLI; in VaultX zelf beschermt Authentik je login.
-          </p>
-          {passwordField}
+          <MasterField value={password} onChange={setPassword} />
           <ErrorBox error={start.error} />
           <div className="form-actions">
-            <button className="btn btn-primary" disabled={start.isPending || !password}>
+            <button className="btn" disabled={start.isPending || !password}>
               {start.isPending ? "Controleren…" : "Instellen met een authenticator-app"}
             </button>
           </div>
         </form>
       )}
-    </Card>
+    </div>
+  );
+}
+
+function DisableAll({ s, onChange }: { s: VaultStatus; onChange: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const proof = useProof(s);
+  const disable = useMutation({
+    mutationFn: async () => {
+      const { loginHash } = await deriveLogin(unlockParams(s), password);
+      return api.post(`${BASE}/2fa/disable`, { master_password_hash: loginHash, ...(await proof(code)) });
+    },
+    onSuccess: () => {
+      setPassword("");
+      setCode("");
+      setOpen(false);
+      onChange();
+    },
+  });
+  if (!open)
+    return (
+      <div className="form-actions">
+        <button className="btn btn-ghost btn-danger-text" onClick={() => setOpen(true)}>
+          Tweestapsverificatie helemaal uitzetten
+        </button>
+      </div>
+    );
+  return (
+    <form
+      className="form twofactor-section"
+      style={{ maxWidth: 520 }}
+      onSubmit={(e) => {
+        e.preventDefault();
+        disable.mutate();
+      }}
+    >
+      <p className="muted small">Haalt de app, alle sleutels en de herstelcode weg.</p>
+      <MasterField value={password} onChange={setPassword} />
+      <label className="field">
+        <span>Code uit de app of herstelcode{s.security_keys.length ? " (leeg: bevestigen met je sleutel)" : ""}</span>
+        <input autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} />
+      </label>
+      <ErrorBox error={disable.error} />
+      <div className="form-actions">
+        <button
+          className="btn btn-danger"
+          disabled={disable.isPending || !password || (!code && !s.security_keys.length)}
+        >
+          {disable.isPending ? "Controleren…" : "Tweestapsverificatie uitzetten"}
+        </button>
+        <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>
+          Annuleren
+        </button>
+      </div>
+    </form>
   );
 }
 

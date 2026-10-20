@@ -6,6 +6,7 @@ import { useMe } from "../api/hooks";
 import type { AuditPage, Session, UserDetail } from "../api/types";
 import { PasswordForm } from "../components/accounts";
 import { AuditTable } from "../components/AuditTable";
+import { LoginSecurityKeys } from "../components/loginKeys";
 import { Badge, Card, Empty, ErrorBox, Loading, Modal, PageHeader, SourceBadge } from "../components/ui";
 import { formatDate, relative, roleLabels, userLabel } from "../format";
 
@@ -214,6 +215,7 @@ export function UserDetailPage() {
           </dl>
         </Card>
       )}
+      {isSelf && u.has_password && <LoginSecurityKeys />}
       <Modal
         title={pwOpen === "own" ? "Mijn wachtwoord wijzigen" : u.has_password ? "Wachtwoord resetten" : "Wachtwoord instellen"}
         open={pwOpen !== null}

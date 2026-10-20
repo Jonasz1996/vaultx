@@ -42,6 +42,8 @@ class User(TimestampMixin, Base):
     # Te veel foute wachtwoorden na elkaar: tijdelijk geen wachtwoordlogin.
     failed_logins: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Herstelcode voor de tweede stap na het wachtwoord (beveiligingssleutel kwijt), SHA-256.
+    login_recovery_code_hash: Mapped[str | None] = mapped_column(String(64))
 
     memberships = relationship("Membership", back_populates="user", cascade="all, delete-orphan")
 

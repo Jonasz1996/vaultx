@@ -41,6 +41,7 @@ from app.repositories import UserRepository, VaultAccountRepository, VaultDevice
 from app.services import totp
 from app.services.audit import AuditService
 from app.services.principal import Actor
+from app.services.webauthn import SCOPE_VAULT, WebAuthnError, WebAuthnService
 
 DEFAULT_KDF_ITERATIONS = 600_000
 # "Onthoud mij" bij tweestapsverificatie: zo lang vraagt een apparaat geen code meer.
@@ -52,14 +53,20 @@ def totp_context(user_id: UUID) -> str:
 
 
 def clear_two_factor(account: VaultAccount) -> None:
-    """Zet tweestapsverificatie uit. Onthouden apparaten vervallen vanzelf: zonder
-    geheim wordt er niet meer om een tweede stap gevraagd, en bij opnieuw aanzetten
-    worden alle onthoud-tokens gewist (zie VaultService.enable_two_factor)."""
+    """Zet tweestapsverificatie uit (de beveiligingssleutels wist clear_vault_two_factor).
+    Onthouden apparaten vervallen vanzelf: zonder tweede stap wordt er niet meer om
+    gevraagd, en bij opnieuw aanzetten worden alle onthoud-tokens gewist."""
     account.totp_secret = None
     account.totp_pending = None
     account.totp_last_step = None
     account.recovery_code_hash = None
     account.two_factor_enabled_at = None
+
+
+async def clear_vault_two_factor(db: AsyncSession, settings: Settings, account: VaultAccount) -> None:
+    """Alles uit: authenticator-app, herstelcode en de beveiligingssleutels van de kluis."""
+    clear_two_factor(account)
+    await WebAuthnService(db, settings).delete_all(account.user_id, SCOPE_VAULT)
 
 
 # Bitwarden DeviceType, voor leesbare apparaatnamen in de UI en de auditlog.
@@ -117,6 +124,7 @@ class TwoFactorProvider:
 
     AUTHENTICATOR = 0
     REMEMBER = 5
+    WEBAUTHN = 7
     RECOVERY_CODE = 8
 
 
@@ -127,14 +135,25 @@ class TwoFactorInput:
     remember: bool
 
 
-def two_factor_required(account: VaultAccount) -> IdentityError:
+def two_factor_required(account: VaultAccount, webauthn_options: dict | None = None) -> IdentityError:
+    """Antwoord "tweede stap nodig" met de methodes die deze kluis heeft. Voor een sleutel
+    (provider 7) staan de opties voor navigator.credentials.get erbij, met een nieuwe challenge."""
+    providers: dict[str, dict | None] = {}
+    if account.totp_secret is not None:
+        providers[str(TwoFactorProvider.AUTHENTICATOR)] = None
+    if webauthn_options is not None:
+        providers[str(TwoFactorProvider.WEBAUTHN)] = webauthn_options
+    if not providers:
+        # Enkel sleutels, maar VaultX heeft (nu) geen domeinnaam: de clients tonen dan nog
+        # altijd de knop voor de herstelcode.
+        providers[str(TwoFactorProvider.AUTHENTICATOR)] = None
     return IdentityError(
         "invalid_grant",
         "Tweestapsverificatie is vereist.",
         "Two factor required.",
         extra={
-            "TwoFactorProviders": [TwoFactorProvider.AUTHENTICATOR],
-            "TwoFactorProviders2": {str(TwoFactorProvider.AUTHENTICATOR): None},
+            "TwoFactorProviders": [int(k) for k in providers],
+            "TwoFactorProviders2": providers,
             "MasterPasswordPolicy": {"Object": "masterPasswordPolicy"},
             "Email": account.email,
         },
@@ -248,6 +267,13 @@ class VaultAuthService:
         self.users = UserRepository(db)
         self.audit = AuditService(db)
         self.tokens = VaultTokens(settings)
+        self.webauthn = WebAuthnService(db, settings)
+
+    async def _two_factor_required(self, account: VaultAccount) -> IdentityError:
+        creds = await self.webauthn.credentials(account.user_id, SCOPE_VAULT)
+        return two_factor_required(
+            account, self.webauthn.assertion_options(account.user_id, SCOPE_VAULT, creds)
+        )
 
     async def prelogin(self, email: str) -> PreloginData:
         email = normalize_email(email)
@@ -411,7 +437,7 @@ class VaultAuthService:
         of gooit IdentityError: zonder code de vraag om een code, met een foute code een fout
         die meetelt voor de vergrendeling (net als een fout master password)."""
         if two_factor is None or not two_factor.token:
-            raise two_factor_required(account)
+            raise await self._two_factor_required(account)
         if two_factor.provider == TwoFactorProvider.REMEMBER:
             if (
                 device is not None
@@ -422,7 +448,7 @@ class VaultAuthService:
             ):
                 return "onthouden apparaat", None
             # Verlopen of onbekend: gewoon opnieuw om een code vragen (zoals Bitwarden).
-            raise two_factor_required(account)
+            raise await self._two_factor_required(account)
 
         method: str | None = None
         if two_factor.provider == TwoFactorProvider.AUTHENTICATOR and account.totp_secret is not None:
@@ -435,11 +461,17 @@ class VaultAuthService:
             if step is not None:
                 account.totp_last_step = step
                 method = "authenticator"
+        elif two_factor.provider == TwoFactorProvider.WEBAUTHN:
+            try:
+                cred = await self.webauthn.verify(account.user_id, SCOPE_VAULT, two_factor.token)
+                method = f"beveiligingssleutel ({cred.name})"
+            except WebAuthnError:
+                method = None
         elif two_factor.provider == TwoFactorProvider.RECOVERY_CODE and account.recovery_code_hash:
             given = hash_token(totp.normalize_recovery_code(two_factor.token))
             if hmac.compare_digest(given, account.recovery_code_hash):
                 # Zoals bij Bitwarden: de herstelcode zet tweestapsverificatie uit.
-                clear_two_factor(account)
+                await clear_vault_two_factor(self.db, self.settings, account)
                 await self.audit.record(
                     "vault.2fa.disable",
                     actor,
