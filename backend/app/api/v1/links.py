@@ -3,6 +3,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Response, status
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import CurrentPrincipal, DbSession
 from app.schemas.links import (
@@ -28,6 +29,17 @@ ArchiveKind = Literal["screenshot", "pdf", "readable", "page", "preview"]
 
 # Een gearchiveerde pagina is vreemde HTML: zonder scripts, formulieren of eigen origin tonen.
 # Enkel ingebedde (data:) bronnen, zodat openen ook niets naar buiten lekt.
+# Welk bestandstype elke soort archief mag hebben. Een archief met een ander type (bv. HTML
+# als "screenshot" uit een gemanipuleerde Linkwarden-database) wordt enkel als download gegeven,
+# anders draait die HTML als VaultX zelf in de browser.
+ARCHIVE_TYPES = {
+    "screenshot": {"image/png", "image/jpeg", "image/webp"},
+    "preview": {"image/png", "image/jpeg", "image/webp"},
+    "pdf": {"application/pdf"},
+    "readable": {"application/json"},
+    "page": {"text/html"},
+}
+
 PAGE_CSP = (
     "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline' data:; "
     "font-src data:; media-src data:"
@@ -103,7 +115,8 @@ async def delete_tag(tag_id: UUID, p: CurrentPrincipal, db: DbSession) -> Respon
     "/import", response_model=ImportResult, summary="Links importeren (Linkwarden-JSON of bladwijzers)"
 )
 async def import_links(body: LinkImportIn, p: CurrentPrincipal, db: DbSession) -> ImportResult:
-    data = parse_upload(body.format, body.data)
+    # Een bestand van tientallen MB parsen mag de andere verzoeken niet ophouden.
+    data = await run_in_threadpool(parse_upload, body.format, body.data)
     return await LinkImporter(db).apply(p.user.id, p.actor, data)
 
 
@@ -185,6 +198,11 @@ async def get_archive(
         ext = "jpeg"
     if kind == "page":
         headers["Content-Security-Policy"] = PAGE_CSP
+    media_type = a.media_type.split(";")[0].strip().lower()
+    if media_type not in ARCHIVE_TYPES[kind]:
+        media_type = "application/octet-stream"
+        headers["Content-Security-Policy"] = PAGE_CSP
+        download = True
     if download:
         headers["Content-Disposition"] = f'attachment; filename="link-{link_id}-{kind}.{ext}"'
-    return Response(content=a.data, media_type=a.media_type, headers=headers)
+    return Response(content=a.data, media_type=media_type, headers=headers)

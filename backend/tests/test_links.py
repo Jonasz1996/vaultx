@@ -414,3 +414,40 @@ async def test_import_cli_rejects_non_linkwarden_database(linkwarden_db):
     wrong = linkwarden_db.replace("lw_test", "public")
     with pytest.raises(VaultXError, match="geen Linkwarden-database"):
         await import_linkwarden(_args(dsn=wrong, to="jonas"))
+
+
+async def test_archive_with_wrong_type_is_only_a_download(make_client):
+    import uuid
+
+    from app.core.db import get_sessionmaker
+    from app.models import LinkArchive
+
+    c = await make_client()
+    await c.login("jonas")
+    link = await _link(c, "https://example.com/")
+    html = b"<script>alert(document.cookie)</script>"
+    async with get_sessionmaker()() as db:
+        db.add(
+            LinkArchive(
+                link_id=uuid.UUID(link["id"]),
+                kind="screenshot",
+                media_type="text/html",
+                size=len(html),
+                data=html,
+            )
+        )
+        await db.commit()
+    r = await c.get(f"/api/v1/links/{link['id']}/archives/screenshot")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert r.headers["content-disposition"].startswith("attachment")
+    assert "sandbox" in r.headers["content-security-policy"]
+
+
+async def test_malformed_import_is_a_clear_error(make_client):
+    c = await make_client()
+    await c.login("jonas")
+    bad = json.dumps({"format": "vaultx-links", "collections": [{"name": "zonder id"}]})
+    r = await c.post_json("/api/v1/links/import", {"format": "linkwarden", "data": bad})
+    assert r.status_code == 422
+    assert "verwachte vorm" in r.json()["detail"]

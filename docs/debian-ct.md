@@ -88,6 +88,7 @@ systemctl daemon-reload && systemctl enable --now vaultx
 curl http://127.0.0.1:8000/health
 
 /opt/vaultx/deploy/debian/tls-cert.sh       # zelfondertekend certificaat voor https op de container
+cp /opt/vaultx/deploy/debian/nginx-realip.conf /etc/vaultx/   # zet hier het IP van je NPM-host
 cp /opt/vaultx/deploy/debian/nginx-vaultx.conf /etc/nginx/sites-available/vaultx
 ln -s /etc/nginx/sites-available/vaultx /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
@@ -149,9 +150,26 @@ zet het de oude terug), herstart VaultX (dat migreert de database) en wacht
 tot `/health/ready` antwoordt. Lukt dat niet, dan toont het de log en hoe je
 terugzet (zie [backup.md](backup.md)).
 
-Heb je in `/etc/nginx/sites-available/vaultx` zelf iets aangepast (bv.
-`set_real_ip_from` beperkt tot je NPM-host), zet dat dan na het updaten opnieuw
-in de nieuwe versie; het oude bestand staat ernaast als `.bak-<tijd>`.
+Faalt de Python-installatie, de frontend-build of `nginx -t`, dan zet het
+script zelf de vorige code en pakketten terug; VaultX en de vorige UI blijven
+gewoon draaien. De frontend wordt in een aparte map gebouwd en pas daarna
+omgewisseld. Het script vernieuwt ook de nachtelijke back-uptimer en zet hem aan.
+
+Welke proxy het echte client-IP mag doorgeven, staat in
+`/etc/vaultx/nginx-realip.conf`. Het script maakt dat bestand eenmalig aan (met
+alle privé-adressen) en overschrijft het daarna nooit. Zet er enkel het IP van je
+NPM-host in, dan kan niemand op je LAN via een vals `X-Forwarded-For` de
+rate limit op logins omzeilen of een vals IP in de auditlog zetten:
+
+```bash
+# vervang 192.168.10.244 door het IP van je NPM-host
+echo 'set_real_ip_from 192.168.10.244;' > /etc/vaultx/nginx-realip.conf
+nginx -t && systemctl reload nginx
+```
+
+Heb je in `/etc/nginx/sites-available/vaultx` zelf iets anders aangepast, zet
+dat dan na het updaten opnieuw in de nieuwe versie; het oude bestand staat
+ernaast als `.bak-<tijd>`.
 
 ## Back-up
 

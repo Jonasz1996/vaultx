@@ -319,3 +319,17 @@ async def test_password_login_works_on_any_address(admin, make_client, base_url)
     assert (await c.get("/api/v1/me")).json()["username"] == "carol"
     r = await c.post("/auth/logout", headers={"X-VaultX-CSRF": "1"})
     assert r.json()["redirect_url"] == "/login?logged_out=1"
+
+
+async def test_change_own_password_cannot_be_guessed(admin, make_client):
+    await create(admin)
+    c = await make_client()
+    await pw_login(c, "carol")
+    for _ in range(5):
+        body = {"current_password": "geraden", "new_password": "nieuw-wachtwoord-1"}
+        assert (await c.post_json("/api/v1/me/password", body)).status_code == 422
+    # Vergrendeld: ook het juiste wachtwoord helpt nu niet meer
+    r = await c.post_json(
+        "/api/v1/me/password", {"current_password": PW, "new_password": "nieuw-wachtwoord-1"}
+    )
+    assert r.status_code == 429

@@ -307,13 +307,44 @@ async def test_reset_invalidates_tokens(make_client):
     c = await make_client()
     account = await enroll(c, "jonas")
     h = await bearer(c, account)
-    r = await c.delete_("/api/v1/me/vault")
+    r = await c.post_json("/api/v1/me/vault/reset", {"master_password_hash": account.password_hash})
     assert r.status_code == 204
     assert (await c.get("/api/sync", headers=h)).status_code == 401
     assert (await c.get("/api/v1/me/vault")).json()["enrolled"] is False
     # Daarna opnieuw activeren kan
     _, payload = new_enrollment("jonas@example.com", "ander wachtwoord")
     assert (await c.post_json("/api/v1/me/vault", payload)).status_code == 201
+
+
+async def test_reset_needs_master_password_or_fresh_login(make_client):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from app.core.db import get_sessionmaker
+    from app.models import UserSession
+
+    async def login_age(minutes: int) -> None:
+        async with get_sessionmaker()() as db:
+            created = datetime.now(UTC) - timedelta(minutes=minutes)
+            await db.execute(update(UserSession).values(created_at=created))
+            await db.commit()
+
+    c = await make_client()
+    account = await enroll(c, "jonas")
+    # Fout master password: geweigerd, de kluis blijft
+    wrong = base64.b64encode(b"x" * 32).decode()
+    assert wrong != account.password_hash
+    r = await c.post_json("/api/v1/me/vault/reset", {"master_password_hash": wrong})
+    assert r.status_code == 422
+    # Zonder master password: enkel kort na een nieuwe login (master password vergeten)
+    await login_age(30)
+    r = await c.post_json("/api/v1/me/vault/reset", {})
+    assert r.status_code == 403
+    assert (await c.get("/api/v1/me/vault")).json()["enrolled"] is True
+    await login_age(1)
+    assert (await c.post_json("/api/v1/me/vault/reset", {})).status_code == 204
+    assert (await c.get("/api/v1/me/vault")).json()["enrolled"] is False
 
 
 async def test_lockout_after_failed_logins(make_client, monkeypatch):

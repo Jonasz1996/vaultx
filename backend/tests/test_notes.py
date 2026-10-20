@@ -184,7 +184,7 @@ async def test_import_and_reset_removes_notes(make_client):
     h = await bearer(c, account)
     assert (await c.get("/api/sync", headers=h)).json()["ciphers"] == []
 
-    assert (await c.delete_("/api/v1/me/vault")).status_code == 204
+    assert (await c.post_json("/api/v1/me/vault/reset", {})).status_code == 204
     account = await enroll(c, "jonas")
     assert (await c.get("/api/v1/me/notes")).json() == []
 
@@ -260,7 +260,7 @@ async def test_files_removed_with_vault(make_client):
     c = await make_client()
     account = await enroll(c, "jonas")
     assert (await upload(c, account, "a.txt", enc_file(account, b"hallo"))).status_code == 201
-    assert (await c.delete_("/api/v1/me/vault")).status_code == 204
+    assert (await c.post_json("/api/v1/me/vault/reset", {})).status_code == 204
     await enroll(c, "jonas")
     assert (await c.get("/api/v1/me/notes/files")).json()["files"] == []
 

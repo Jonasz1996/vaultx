@@ -262,8 +262,9 @@ terugzetten, verwijderen, verplaatsen, ook in bulk), `/api/ciphers/import`,
 `/api/folders`, `/icons/{domein}/icon.png` en de WebSocket `/notifications/hub`
 (SignalR, MessagePack of JSON; `POST /notifications/hub/negotiate`).
 
-VaultX-eigen API voor de webinterface: `GET/POST/DELETE /api/v1/me/vault`,
-`POST /api/v1/me/vault/unlock`, `POST /api/v1/me/vault/password`,
+VaultX-eigen API voor de webinterface: `GET/POST /api/v1/me/vault`,
+`POST /api/v1/me/vault/reset` (kluis verwijderen: master password, of zonder als je
+binnen 10 minuten opnieuw bent ingelogd), `POST /api/v1/me/vault/unlock`, `POST /api/v1/me/vault/password`,
 `POST /api/v1/me/vault/2fa/{setup,enable,disable}`,
 `POST /api/v1/me/vault/devices/{id}/revoke` en (beheerder)
 `DELETE /api/v1/users/{id}/vault-2fa`.

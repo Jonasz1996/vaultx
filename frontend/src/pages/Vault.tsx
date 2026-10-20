@@ -136,7 +136,6 @@ function Enrolled({ s, onChange }: { s: VaultStatus; onChange: () => void }) {
     mutationFn: (id: string) => api.post(`${BASE}/devices/${id}/revoke`),
     onSuccess: onChange,
   });
-  const reset = useMutation({ mutationFn: () => api.delete(BASE), onSuccess: onChange });
   const devices = showRevoked ? s.devices : s.devices.filter((d) => !d.revoked_at);
   const revokedCount = s.devices.length - s.devices.filter((d) => !d.revoked_at).length;
   const kdf =
@@ -242,24 +241,57 @@ function Enrolled({ s, onChange }: { s: VaultStatus; onChange: () => void }) {
       </Card>
       <TwoFactor s={s} onChange={onChange} />
       <ChangePassword s={s} onDone={onChange} />
-      <Card title="Kluis leegmaken">
-        <p className="muted small">
-          Master password vergeten? Niemand kan het herstellen. Je kan de kluis wel verwijderen en opnieuw activeren;
-          al je items gaan dan definitief verloren en alle apparaten worden afgemeld.
-        </p>
-        <ErrorBox error={reset.error} />
-        <button
-          className="btn btn-danger"
-          disabled={reset.isPending}
-          onClick={() => {
-            const answer = prompt(`Typ VERWIJDER om je kluis met ${s.item_count + s.trash_count} items te wissen.`);
-            if (answer === "VERWIJDER") reset.mutate();
-          }}
-        >
+      <ResetVault s={s} onDone={onChange} />
+    </>
+  );
+}
+
+function ResetVault({ s, onDone }: { s: VaultStatus; onDone: () => void }) {
+  const [password, setPassword] = useState("");
+  const reset = useMutation({
+    mutationFn: async () => {
+      // Met master password, of leeg als je het kwijt bent: dan moet je net opnieuw ingelogd zijn.
+      const body = password ? { master_password_hash: (await deriveLogin(unlockParams(s), password)).loginHash } : {};
+      return api.post(`${BASE}/reset`, body);
+    },
+    onSuccess: () => {
+      setPassword("");
+      onDone();
+    },
+  });
+  return (
+    <Card title="Kluis leegmaken">
+      <p className="muted small">
+        Master password vergeten? Niemand kan het herstellen. Je kan de kluis wel verwijderen en opnieuw activeren;
+        al je items gaan dan definitief verloren en alle apparaten worden afgemeld.
+      </p>
+      <p className="muted small">
+        Vul je master password in om te bevestigen. Ben je het vergeten, laat het veld dan leeg: dat kan enkel binnen
+        10 minuten nadat je opnieuw bent ingelogd bij VaultX.
+      </p>
+      <ErrorBox error={reset.error} />
+      <form
+        className="row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const answer = prompt(`Typ VERWIJDER om je kluis met ${s.item_count + s.trash_count} items te wissen.`);
+          if (answer === "VERWIJDER") reset.mutate();
+        }}
+      >
+        <label className="field">
+          <span>Master password (leeg als je het vergeten bent)</span>
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </label>
+        <button className="btn btn-danger" type="submit" disabled={reset.isPending}>
           Kluis verwijderen
         </button>
-      </Card>
-    </>
+      </form>
+    </Card>
   );
 }
 

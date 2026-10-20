@@ -28,7 +28,7 @@ from app.core.security import (
     seal_secret,
     verify_master_password,
 )
-from app.models import VaultAccount, VaultCipher, VaultDevice, VaultFolder
+from app.models import UserSession, VaultAccount, VaultCipher, VaultDevice, VaultFolder
 from app.models.base import new_uuid
 from app.repositories import (
     VaultAccountRepository,
@@ -49,6 +49,9 @@ from app.services.vault_auth import (
     totp_context,
 )
 from app.services.vault_push import PushType, publish
+
+# Kluis verwijderen zonder master password (vergeten) mag enkel kort na een nieuwe login.
+RESET_FRESH_LOGIN_MINUTES = 10
 
 
 class StaleCipherError(Exception):
@@ -151,8 +154,32 @@ class VaultService:
         await self.db.commit()
         return account
 
+    async def _fresh_session(self, p: Principal) -> bool:
+        if p.auth_method != "session" or p.session_id is None:
+            return False
+        session = await self.db.get(UserSession, p.session_id)
+        if session is None:
+            return False
+        return session.created_at > datetime.now(UTC) - timedelta(minutes=RESET_FRESH_LOGIN_MINUTES)
+
+    @staticmethod
+    def _count_failure(account: VaultAccount, settings: Settings) -> bool:
+        """Eén mislukte poging erbij; True als het account nu vergrendeld is."""
+        account.failed_logins += 1
+        if account.failed_logins < settings.vault_max_failed_logins:
+            return False
+        account.locked_until = datetime.now(UTC) + timedelta(minutes=settings.vault_lockout_minutes)
+        account.failed_logins = 0
+        return True
+
     async def _verify_master(
-        self, p: Principal, master_password_hash: str, settings: Settings, action: str
+        self,
+        p: Principal,
+        master_password_hash: str,
+        settings: Settings,
+        action: str,
+        *,
+        second_step: bool = False,
     ) -> VaultAccount:
         """Controleert het master password in de webinterface, met dezelfde grens op mislukte
         pogingen als bij inloggen vanuit een app: het telt samen. Commit bij een fout."""
@@ -175,11 +202,8 @@ class VaultService:
             verify_master_password, master_password_hash, account.master_password_hash
         )
         if not valid:
-            account.failed_logins += 1
             details: dict[str, Any] = {"reason": "fout master password"}
-            if account.failed_logins >= settings.vault_max_failed_logins:
-                account.locked_until = now + timedelta(minutes=settings.vault_lockout_minutes)
-                account.failed_logins = 0
+            if self._count_failure(account, settings):
                 details["locked_until"] = account.locked_until.isoformat()
             await self.audit.record(
                 action,
@@ -191,8 +215,10 @@ class VaultService:
             )
             await self.db.commit()
             raise InvalidOperationError("Master password is onjuist")
-        account.failed_logins = 0
-        account.locked_until = None
+        if not second_step:
+            # Met een tweede stap erna (2FA-code) telt pas het geheel als geslaagd.
+            account.failed_logins = 0
+            account.locked_until = None
         return account
 
     async def unlock(self, p: Principal, master_password_hash: str, settings: Settings) -> VaultAccount:
@@ -302,7 +328,9 @@ class VaultService:
     async def disable_two_factor(
         self, p: Principal, master_password_hash: str, code: str, settings: Settings
     ) -> None:
-        account = await self._verify_master(p, master_password_hash, settings, "vault.2fa.disable")
+        account = await self._verify_master(
+            p, master_password_hash, settings, "vault.2fa.disable", second_step=True
+        )
         if not account.two_factor_enabled or account.totp_secret is None:
             raise InvalidOperationError("Tweestapsverificatie staat niet aan")
         secret = self._open_totp(settings, account, account.totp_secret)
@@ -314,9 +342,21 @@ class VaultService:
         ):
             via = "herstelcode"
         if via is None:
+            # Telt mee met de mislukte pogingen: anders raadt wie je sessie en master password
+            # heeft de zes cijfers gewoon tot hij er is.
+            self._count_failure(account, settings)
+            await self.audit.record(
+                "vault.2fa.disable",
+                p.actor,
+                outcome="failure",
+                target_type="vault",
+                target_id=p.user.id,
+                details={"reason": "foute code"},
+            )
             await self.db.commit()
             raise InvalidOperationError("De code klopt niet")
         clear_two_factor(account)
+        account.failed_logins = 0
         await self.audit.record(
             "vault.2fa.disable", p.actor, target_type="vault", target_id=p.user.id, details={"via": via}
         )
@@ -339,12 +379,29 @@ class VaultService:
         )
         await self.db.commit()
 
-    async def reset(self, p: Principal) -> None:
+    async def reset(self, p: Principal, master_password_hash: str | None, settings: Settings) -> None:
         """Verwijdert de kluis met alle items. Zonder master password is de inhoud
-        toch onleesbaar; dit is de enige 'herstel'-optie bij een vergeten wachtwoord."""
-        account = await self.accounts.lock(p.user.id)
-        if account is None:
-            raise NotFoundError("Je hebt nog geen kluis")
+        toch onleesbaar; dit is de enige 'herstel'-optie bij een vergeten wachtwoord.
+
+        Bewijs vereist: het master password, of (als je dat kwijt bent) een browsersessie
+        die net is ingelogd. Een gestolen of vergeten open sessie wist zo niet je kluis."""
+        if master_password_hash:
+            account = await self._verify_master(p, master_password_hash, settings, "vault.reset")
+        else:
+            if not await self._fresh_session(p):
+                raise await self.audit.deny(
+                    "vault.reset",
+                    p.actor,
+                    target_type="vault",
+                    target_id=p.user.id,
+                    message=(
+                        "Vul je master password in. Ben je het vergeten, log dan opnieuw in en "
+                        f"verwijder de kluis binnen {RESET_FRESH_LOGIN_MINUTES} minuten."
+                    ),
+                )
+            account = await self.accounts.lock(p.user.id)
+            if account is None:
+                raise NotFoundError("Je hebt nog geen kluis")
         items, trash = await self.ciphers.counts(account.user_id)
         await self.accounts.delete(account)
         await self.audit.record(

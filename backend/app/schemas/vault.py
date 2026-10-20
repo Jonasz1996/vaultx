@@ -221,3 +221,14 @@ class TwoFactorEnableOut(BaseModel):
 class TwoFactorDisable(BaseModel):
     master_password_hash: str = Field(max_length=128)
     code: str = Field(min_length=6, max_length=64, description="Code uit de app of de herstelcode")
+
+
+class VaultReset(BaseModel):
+    """Kluis verwijderen. Zonder master password (vergeten) moet de sessie net ingelogd zijn."""
+
+    master_password_hash: str | None = Field(default=None, max_length=128)
+
+    @field_validator("master_password_hash")
+    @classmethod
+    def _hash_is_32_bytes(cls, v: str | None) -> str | None:
+        return _check_hash(v) if v else None

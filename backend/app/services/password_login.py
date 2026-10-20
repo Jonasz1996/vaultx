@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings
 from app.core.context import RequestMeta
@@ -55,7 +56,8 @@ class PasswordLoginService:
         if user is None or user.password_hash is None:
             # Even traag als een echt account; niet in de auditlog, anders kan iedereen zonder
             # account die (append-only) log volschrijven.
-            verify_password(password, dummy_password_hash())
+            # Argon2 in een thread: anders staat de hele server stil zolang hij rekent.
+            await run_in_threadpool(verify_password, password, dummy_password_hash())
             log.info("Wachtwoordlogin voor onbekende naam geweigerd")
             raise AuthenticationError(WRONG_CREDENTIALS)
 
@@ -67,7 +69,7 @@ class PasswordLoginService:
                 "Te veel foute pogingen. Wachtwoordlogin voor dit account is tijdelijk vergrendeld; "
                 "probeer het later opnieuw."
             )
-        if not verify_password(password, user.password_hash):
+        if not await run_in_threadpool(verify_password, password, user.password_hash):
             user.failed_logins = (user.failed_logins or 0) + 1
             locked = user.failed_logins >= self.settings.local_login_max_failed
             if locked:
@@ -83,7 +85,7 @@ class PasswordLoginService:
         user.locked_until = None
         user.last_login_at = now
         if password_needs_rehash(user.password_hash):
-            user.password_hash = hash_password(password)
+            user.password_hash = await run_in_threadpool(hash_password, password)
         await self.audit.record(
             "auth.login",
             actor,
