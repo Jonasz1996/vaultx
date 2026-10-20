@@ -21,6 +21,7 @@ import { VaultPage } from "./pages/Vault";
 
 // Notities (Markdown, grafiek, zip) laden pas wanneer je ze opent.
 const NotesPage = lazy(() => import("./pages/Notes").then((m) => ({ default: m.NotesPage })));
+const LinksPage = lazy(() => import("./pages/Links").then((m) => ({ default: m.LinksPage })));
 
 /** Laat enkel ingelogde gebruikers door; anders naar de loginpagina. */
 function RequireAuth() {
@@ -59,6 +60,14 @@ export const router = createBrowserRouter([
             element: (
               <Suspense fallback={<Loading />}>
                 <NotesPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: "links",
+            element: (
+              <Suspense fallback={<Loading />}>
+                <LinksPage />
               </Suspense>
             ),
           },

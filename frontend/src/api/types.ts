@@ -541,3 +541,63 @@ export interface UnpublishPlan {
   before: Partial<HostConfig> & Record<string, unknown>;
   authentik: { remove?: AuthentikState } | null;
 }
+
+// Links (fase 10)
+
+export interface LinkCollection {
+  id: string;
+  parent_id: string | null;
+  name: string;
+  description: string;
+  color: string;
+  created_at: string;
+  updated_at: string;
+  link_count: number;
+}
+
+export interface LinkTag {
+  id: string;
+  name: string;
+  link_count: number;
+}
+
+export type LinkArchiveKind = "screenshot" | "pdf" | "readable" | "page" | "preview";
+
+export interface LinkArchive {
+  kind: LinkArchiveKind;
+  media_type: string;
+  size: number;
+  created_at: string;
+}
+
+export interface LinkItem {
+  id: string;
+  url: string;
+  name: string;
+  description: string;
+  collection_id: string | null;
+  pinned: boolean;
+  source: string;
+  tags: string[];
+  archives: LinkArchive[];
+  created_at: string;
+  updated_at: string;
+  imported_at: string | null;
+}
+
+export interface LinkPage {
+  items: LinkItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface LinkImportResult {
+  collections_created: number;
+  links_created: number;
+  links_updated: number;
+  tags_created: number;
+  archives_added: number;
+  skipped: number;
+  warnings: string[];
+}

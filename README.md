@@ -8,8 +8,15 @@ fundering), **fase 1** (NPM-connector en applicatiecatalogus), **fase 2**
 automatisch aanmaken), **fase 5** (automatische login: wie al bij Authentik
 is aangemeld, komt meteen in de app), **fase 6** (app publiceren), **fase 7**
 (versleutelde notities zoals in Obsidian), **fase 8** (inloggen met een
-gewoon account, naast Authentik) en **fase 9** (wat de Bitwarden-apps nog
-misten tegenover Bitwarden en Vaultwarden).
+gewoon account, naast Authentik), **fase 9** (wat de Bitwarden-apps nog
+misten tegenover Bitwarden en Vaultwarden) en **fase 10** (links bewaren zoals
+in Linkwarden).
+
+**Fase 10 (eerste deel)**
+
+- "Links" in het menu: bladwijzers met titel, beschrijving en tags, in geneste collecties met een kleur, vastpinnen, zoeken (ook in de tekst van gearchiveerde pagina's) en filteren op collectie of tag, tags hernoemen en samenvoegen, export als JSON
+- Importeren uit de Linkwarden-export (JSON) en uit de bladwijzers van Edge, Chrome of Firefox (HTML), of rechtstreeks uit een Linkwarden-database met `python -m app.cli import-linkwarden`, inclusief de screenshots, pdf's, leesbare versies en volledige pagina's die Linkwarden al had gemaakt. Opnieuw importeren vult aan zonder dubbels
+- Getest in Chromium (ook in CI). Zie [docs/links.md](docs/links.md)
 
 **Webkluis**
 

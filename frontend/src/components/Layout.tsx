@@ -9,6 +9,7 @@ const nav = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/vault", label: "Mijn kluis" },
   { to: "/notes", label: "Notities" },
+  { to: "/links", label: "Links" },
   { to: "/users", label: "Gebruikers", adminOnly: true },
   { to: "/organizations", label: "Organisaties" },
   { to: "/teams", label: "Teams" },
