@@ -32,7 +32,7 @@ jobs:
     env:
       VAULTX_TEST_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -65,7 +65,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U vaultx" --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -108,7 +108,7 @@ jobs:
     env:
       AK_TOKEN: ci-authentik-bootstrap-token-0123456789
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -184,7 +184,7 @@ jobs:
     env:
       AK_TOKEN: ci-authentik-bootstrap-token-0123456789
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -243,7 +243,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U vaultx" --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -281,7 +281,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U vaultx" --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -334,7 +334,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -346,7 +346,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker build -f docker/backend.Dockerfile -t vaultx-backend:ci .
       - run: docker build -f docker/frontend.Dockerfile -t vaultx-web:ci .
       - name: nginx-configs controleren (Docker-image en Debian-site)
@@ -368,14 +368,14 @@ jobs:
   deploy-scripts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: shellcheck deploy/debian/*.sh
 
   dependencies:
     # Bekende kwetsbaarheden in de afhankelijkheden (Python en de frontend die naar de browser gaat)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
