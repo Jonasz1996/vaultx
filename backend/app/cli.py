@@ -3,6 +3,7 @@
     python -m app.cli create-user --username jonas --email jonas@example.com --admin
     python -m app.cli set-password jonas
     python -m app.cli reset-vault-2fa jonas@example.com    # telefoon en herstelcode kwijt
+    python -m app.cli import-linkwarden --dsn postgresql://linkwarden@db/linkwarden --to jonas
 
 Het wachtwoord wordt gevraagd (twee keer, zonder echo) of met --password-stdin van stdin gelezen.
 Op de Debian-CT, als root (zie docs/accounts.md):
@@ -121,6 +122,74 @@ async def reset_vault_two_factor(email: str) -> str:
         return account.email
 
 
+async def _find_user(db, login: str) -> User:
+    name = login.strip().lower()
+    matches = [
+        u
+        for u in (await UserRepository(db).search(query=name, limit=50, offset=0))[0]
+        if name in {(u.username or "").lower(), (u.email or "").lower()}
+    ]
+    if len(matches) != 1:
+        raise VaultXError(f"Geen eenduidig VaultX-account gevonden voor {login!r}")
+    return matches[0]
+
+
+async def import_linkwarden(args: argparse.Namespace) -> int:
+    """Links importeren uit een Linkwarden-database, een Linkwarden-export of browserbladwijzers."""
+    from pathlib import Path
+
+    from app.services.link_import import LinkImporter, parse_bookmarks_html, parse_linkwarden_json
+    from app.services.linkwarden_db import LinkwardenDatabase
+
+    missing = 0
+    if args.dsn:
+        with LinkwardenDatabase(args.dsn) as lw:
+            if args.list_users:
+                for u in lw.users():
+                    print(f"{u.id}\t{u.username or '-'}\t{u.email or '-'}\t{u.collections} collecties")
+                return 0
+            lw_user = lw.pick_user(args.source_user)
+            data = lw.read(lw_user, Path(args.files) if args.files else None)
+            print(f"Linkwarden-gebruiker {lw_user.username or lw_user.email}: ", end="")
+            # De bestanden worden pas bij het importeren gelezen; tel ontbrekende achteraf.
+            importer_db = lw
+    else:
+        raw = await asyncio.to_thread(Path(args.file).read_text, encoding="utf-8-sig")
+        data = (
+            parse_bookmarks_html(raw)
+            if args.file.lower().endswith((".html", ".htm"))
+            else parse_linkwarden_json(raw)
+        )
+        importer_db = None
+    print(f"{len(data.collections)} collecties en {len(data.links)} links gelezen.")
+    if args.dry_run:
+        for w in data.warnings:
+            print(f"  let op: {w}")
+        return 0
+    if not args.to:
+        raise VaultXError(
+            "Geef met --to het VaultX-account (gebruikersnaam of e-mail) waar de links naartoe gaan"
+        )
+    try:
+        async with get_sessionmaker()() as db:
+            user = await _find_user(db, args.to)
+            res = await LinkImporter(db).apply(user.id, Actor.system("cli", RequestMeta()), data)
+    finally:
+        if importer_db is not None:
+            missing = importer_db.missing_files
+    print(
+        f"OK voor {user.username or user.email}: {res.collections_created} collecties en "
+        f"{res.links_created} links "
+        f"aangemaakt, {res.links_updated} bestaande links aangevuld, {res.tags_created} nieuwe tags, "
+        f"{res.archives_added} archieven, {res.skipped} overgeslagen."
+    )
+    if missing:
+        print(f"  let op: {missing} archiefbestanden staan in de database maar niet in {args.files}")
+    for w in res.warnings:
+        print(f"  let op: {w}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="VaultX-accounts beheren")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -135,7 +204,37 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--password-stdin", action="store_true")
     t = sub.add_parser("reset-vault-2fa", help="Tweestapsverificatie van een kluis uitzetten")
     t.add_argument("email", help="E-mailadres van de kluis (login in de Bitwarden-apps)")
+    li = sub.add_parser(
+        "import-linkwarden",
+        help="Links importeren uit een Linkwarden-database, Linkwarden-export (JSON) of bladwijzers (HTML)",
+    )
+    src = li.add_mutually_exclusive_group(required=True)
+    src.add_argument(
+        "--dsn",
+        help="Linkwarden-database, bv. postgresql://linkwarden@192.168.10.193:5433/linkwarden "
+        "(wachtwoord via PGPASSWORD of ~/.pgpass)",
+    )
+    src.add_argument("--file", help="Linkwarden-export (.json) of browserbladwijzers (.html)")
+    li.add_argument("--to", help="VaultX-account (gebruikersnaam of e-mail) dat de links krijgt")
+    li.add_argument("--from", dest="source_user", help="Linkwarden-gebruiker (id, gebruikersnaam of e-mail)")
+    li.add_argument("--files", help="Map met de Linkwarden-bestanden (STORAGE_FOLDER, standaard data)")
+    li.add_argument("--list-users", action="store_true", help="Enkel de Linkwarden-gebruikers tonen")
+    li.add_argument("--dry-run", action="store_true", help="Enkel lezen en tellen, niets importeren")
     args = parser.parse_args(argv)
+
+    if args.command == "import-linkwarden":
+
+        async def run_import() -> int:
+            try:
+                return await import_linkwarden(args)
+            finally:
+                await dispose_engine()
+
+        try:
+            return asyncio.run(run_import())
+        except (VaultXError, OSError, ValueError) as exc:
+            print(f"Fout: {getattr(exc, 'message', exc)}", file=sys.stderr)
+            return 1
 
     if args.command == "reset-vault-2fa":
 
