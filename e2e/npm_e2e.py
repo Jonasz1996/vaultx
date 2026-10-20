@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -162,9 +163,26 @@ def seed(base: str, identity: str, secret: str) -> None:
             )
         for host in demo_hosts(acl["id"]):
             body = {"forward_scheme": "http", "block_exploits": True, "allow_websocket_upgrade": True, **host}
+            create_host(c, body)
+
+
+def create_host(c: httpx.Client, body: dict) -> None:
+    """Proxy host aanmaken. Vlak na de start herlaadt NPM nginx na elke wijziging en verbreekt
+    het soms de verbinding zonder antwoord; dan opnieuw, tenzij de host er toch al staat."""
+    name = body["domain_names"][0]
+    for attempt in range(5):
+        try:
             r = c.post("/nginx/proxy-hosts", json=body)
-            if r.status_code >= 400:
-                raise SystemExit(f"Aanmaken van {host['domain_names'][0]} mislukt: {r.status_code} {r.text}")
+        except httpx.TransportError as exc:
+            print(f"  {name}: {exc!r}, opnieuw proberen", flush=True)
+            time.sleep(2 * (attempt + 1))
+            if any(name in h["domain_names"] for h in c.get("/nginx/proxy-hosts").raise_for_status().json()):
+                return
+            continue
+        if r.status_code >= 400:
+            raise SystemExit(f"Aanmaken van {name} mislukt: {r.status_code} {r.text}")
+        return
+    raise SystemExit(f"Aanmaken van {name} mislukt: NPM bleef de verbinding verbreken")
 
 
 async def check(base: str, identity: str, secret: str) -> None:
