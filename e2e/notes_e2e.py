@@ -307,8 +307,11 @@ def main() -> None:
             open_note(page, "Proxmox herstel")
             page.get_by_role("button", name="Naast elkaar").click()
             editor = page.locator("textarea.editor")
+            # In één keer invullen: tikken laat de [[-suggesties openklappen, en op een trage runner
+            # pikt de Enter aan het eind dan een suggestie op in plaats van "|80" te laten staan.
+            editor.fill(editor.input_value() + "\n\nOud: ![[foto.png|80]]\n")
+            expect(page.locator(".preview img.note-img").first).to_have_attribute("width", "80")
             editor.press("Control+End")
-            editor.press_sequentially("\n\nOud: ![[foto.png|80]]\n")
             page.locator(".md-toolbar-file input[type=file]").set_input_files(
                 [str(importdir / "netwerkschema.png"), str(importdir / "wachtwoorden-router.txt")]
             )
