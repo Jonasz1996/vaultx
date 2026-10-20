@@ -350,6 +350,16 @@ jobs:
           docker run --rm --add-host backend:127.0.0.1 vaultx-web:ci nginx -t
           docker run --rm -v "$PWD/deploy/debian/nginx-vaultx.conf:/etc/nginx/conf.d/default.conf:ro" \
             docker.io/library/nginx:1.29-alpine nginx -t
+      - name: Debian-site met zelfondertekend certificaat (tls-cert.sh) op poort 443
+        run: |
+          docker run --rm -v "$PWD/deploy/debian:/src:ro" \
+            -v "$PWD/deploy/debian/nginx-vaultx.conf:/etc/nginx/conf.d/default.conf:ro" \
+            docker.io/library/nginx:1.29-alpine sh -ec '
+              apk add --no-cache -q openssl bash
+              VAULTX_TLS_NO_RELOAD=1 bash /src/tls-cert.sh
+              nginx -t && nginx
+              echo | openssl s_client -connect 127.0.0.1:443 2>/dev/null | grep -q "BEGIN CERTIFICATE"
+              echo "https op 443 antwoordt"'
 
   deploy-scripts:
     runs-on: ubuntu-latest

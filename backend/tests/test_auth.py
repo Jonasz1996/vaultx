@@ -251,6 +251,7 @@ async def test_host_header_is_not_trusted_for_redirect_uri(make_client):
         ("http://vaultx.example.be/", True),  # publieke naam zonder TLS: nooit zonder Secure
         ("http://evil.example.com/", True),
         ("http://192.168.0.50/", False),  # LAN-IP zonder NPM ervoor
+        ("https://192.168.0.50/", True),  # LAN-IP met het zelfondertekende certificaat (tls-cert.sh)
         ("http://10.1.2.3:8080/", False),
         ("http://127.0.0.1/", False),
         ("http://[fd00::5]/", False),
