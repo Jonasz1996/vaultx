@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import hmac
 import ipaddress
+import json
 import logging
 import re
+from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, Form, Request, Response
@@ -14,16 +16,19 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CSRF_HEADER, DbSession, MetaDep, OIDCDep, SettingsDep
 from app.core.config import Settings
+from app.core.context import RequestMeta
 from app.core.errors import NotFoundError, PermissionDeniedError
 from app.core.security import new_token, pkce_challenge
+from app.models import User
 from app.repositories import UserRepository
 from app.services.audit import AuditService
 from app.services.identity import IdentityService
 from app.services.oidc import OIDCError
-from app.services.password_login import MAX_PASSWORD_LENGTH, PasswordLoginService
+from app.services.password_login import MAX_PASSWORD_LENGTH, PasswordLoginService, SecondStep
 from app.services.principal import Actor
 from app.services.sessions import SessionService
 
@@ -247,13 +252,52 @@ async def password_login(
     if request.headers.get(CSRF_HEADER) != "1":
         # Ook hier: geen login vanuit een formulier op een andere site (login-CSRF).
         raise PermissionDeniedError("CSRF-header ontbreekt")
-    user = await PasswordLoginService(db, settings).authenticate(data.login, data.password, meta)
+    result = await PasswordLoginService(db, settings).login(data.login, data.password, meta)
+    if isinstance(result, SecondStep):
+        # Wachtwoord klopt; nu de beveiligingssleutel (of de herstelcode), nog geen sessie.
+        return JSONResponse(
+            {"second_step": "security_key", "ticket": result.ticket, "security_key_options": result.options}
+        )
+    return await _password_session(request, db, settings, meta, result, data.next)
+
+
+async def _password_session(
+    request: Request, db: AsyncSession, settings: Settings, meta: RequestMeta, user: User, next: str | None
+) -> Response:
     token, _ = await SessionService(db, settings).create(user, meta=meta, auth_method="password")
     await db.commit()
     # Relatief: wie VaultX op een ander adres opende, blijft daar (de cookie staat ook daar).
-    resp = JSONResponse({"redirect_url": safe_next(data.next)})
+    resp = JSONResponse({"redirect_url": safe_next(next)})
     _session_cookie(resp, request, settings, token)
     return resp
+
+
+class PasswordSecondStep(BaseModel):
+    ticket: str = Field(min_length=1, max_length=512)
+    security_key: dict[str, Any] | None = None
+    recovery_code: str | None = Field(default=None, max_length=64)
+    next: str | None = None
+
+
+@router.post(
+    "/password/second-step",
+    summary="Tweede stap na het wachtwoord: beveiligingssleutel of herstelcode",
+    responses={401: {"description": "Onjuist of verlopen"}, 429: {"description": "Tijdelijk vergrendeld"}},
+)
+async def password_second_step(
+    data: PasswordSecondStep, request: Request, db: DbSession, settings: SettingsDep, meta: MetaDep
+) -> Response:
+    if not settings.local_login_enabled:
+        raise NotFoundError("Inloggen met een wachtwoord staat uit")
+    if request.headers.get(CSRF_HEADER) != "1":
+        raise PermissionDeniedError("CSRF-header ontbreekt")
+    user = await PasswordLoginService(db, settings).second_step(
+        data.ticket,
+        meta,
+        security_key=json.dumps(data.security_key) if data.security_key else None,
+        recovery_code=data.recovery_code,
+    )
+    return await _password_session(request, db, settings, meta, user, data.next)
 
 
 @router.post("/logout", summary="Uitloggen (VaultX en Authentik)")

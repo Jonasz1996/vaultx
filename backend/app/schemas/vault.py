@@ -6,7 +6,7 @@ Het Bitwarden-protocol zelf staat in app/schemas/bitwarden.py.
 import base64
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -135,6 +135,12 @@ class VaultStatusOut(BaseModel):
     # Tweestapsverificatie voor de Bitwarden-apps (fase 9)
     two_factor_enabled: bool = False
     two_factor_enabled_at: datetime | None = None
+    # Welke tweede stappen er zijn: authenticator-app en/of beveiligingssleutels (WebAuthn).
+    authenticator_enabled: bool = False
+    security_keys: list["SecurityKeyOut"] = []
+    # False als VaultX geen domeinnaam heeft (VAULTX_PUBLIC_URL op een IP-adres).
+    security_keys_available: bool = False
+    security_keys_rp_id: str | None = None
     devices: list[VaultDeviceOut] = []
 
 
@@ -214,13 +220,54 @@ class TwoFactorEnable(BaseModel):
 
 
 class TwoFactorEnableOut(BaseModel):
-    # Eenmalig getoond: hiermee kom je binnen als je telefoon weg is.
-    recovery_code: str
+    # Eenmalig getoond: hiermee kom je binnen als je telefoon of sleutel weg is. Leeg als
+    # tweestapsverificatie al aan stond (dan blijft de bestaande herstelcode geldig).
+    recovery_code: str | None = None
 
 
 class TwoFactorDisable(BaseModel):
+    """Bewijs voor het weghalen van (een deel van) de tweede stap: master password plus
+    een code uit de app, de herstelcode of een antwoord van een gekoppelde sleutel."""
+
     master_password_hash: str = Field(max_length=128)
-    code: str = Field(min_length=6, max_length=64, description="Code uit de app of de herstelcode")
+    code: str | None = Field(
+        default=None, min_length=6, max_length=64, description="Code uit de app of de herstelcode"
+    )
+    security_key: dict[str, Any] | None = Field(
+        default=None, description="PublicKeyCredential (JSON) van navigator.credentials.get"
+    )
+
+
+class SecurityKeyOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    name: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    # Passkey die tussen apparaten synchroniseert (in plaats van een vaste sleutel zoals een YubiKey).
+    backed_up: bool = False
+
+
+class SecurityKeyStart(BaseModel):
+    master_password_hash: str = Field(max_length=128)
+
+
+class SecurityKeyOptions(BaseModel):
+    # Opties voor navigator.credentials.create/get (base64url-velden).
+    options: dict[str, Any] | None
+
+
+class SecurityKeyAdd(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    credential: dict[str, Any] = Field(
+        description="PublicKeyCredential (JSON) van navigator.credentials.create"
+    )
+
+
+class SecurityKeyAdded(BaseModel):
+    key: SecurityKeyOut
+    recovery_code: str | None = None
 
 
 class VaultReset(BaseModel):
@@ -232,3 +279,6 @@ class VaultReset(BaseModel):
     @classmethod
     def _hash_is_32_bytes(cls, v: str | None) -> str | None:
         return _check_hash(v) if v else None
+
+
+VaultStatusOut.model_rebuild()

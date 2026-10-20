@@ -37,8 +37,29 @@ Authentik even niet bereikbaar is.
 - Na een wachtwoordwijziging of -reset vervallen de sessies die met het oude wachtwoord begonnen
   (je eigen huidige sessie blijft). Authentik-sessies blijven.
 - Uitloggen uit een wachtwoordsessie gaat niet langs Authentik.
-- Er is nog geen tweede factor (TOTP of passkey) voor wachtwoordlogin. Wie dat nodig heeft, logt
-  via Authentik in, of zet de wachtwoordlogin uit.
+- Tweede stap: koppel een YubiKey, andere FIDO2-sleutel of passkey op je eigen gebruikerspagina
+  (klik op je naam linksonder → *Beveiligingssleutels voor het wachtwoordlogin*). Daarna vraagt
+  de loginpagina na je wachtwoord om de sleutel. Zie hieronder.
+
+## Beveiligingssleutel na het wachtwoord
+
+Op je eigen gebruikerspagina: *Sleutel of passkey toevoegen*, je wachtwoord invullen en de sleutel
+aanraken. Bij de eerste sleutel krijg je eenmalig een **herstelcode**; bewaar die buiten VaultX.
+
+- Inloggen: gebruikersnaam en wachtwoord, daarna vraagt de browser om de sleutel. Pas dan is er
+  een sessie; zonder sleutel blijft het bij "wachtwoord klopt". Een fout antwoord telt mee voor
+  dezelfde vergrendeling als een fout wachtwoord.
+- Werkt enkel op de domeinnaam van VaultX (de host van `VAULTX_PUBLIC_URL`, of
+  `VAULTX_WEBAUTHN_RP_ID`). Op het IP-adres van de CT kan de browser de sleutel niet gebruiken;
+  daar log je in met de herstelcode (die zet de sleutels voor je login uit) of je gaat naar de
+  domeinnaam.
+- Weghalen: wachtwoord plus een gekoppelde sleutel of de herstelcode.
+- Sleutel én herstelcode kwijt: op de CT als root
+  `/opt/vaultx/venv/bin/python -m app.cli reset-login-2fa <gebruikersnaam>` (zie hieronder voor de
+  omgeving). Het wachtwoord blijft nodig.
+- Via Authentik inloggen vraagt deze stap niet: stel daarvoor in Authentik zelf een WebAuthn-
+  stage in (dan vraagt Authentik je YubiKey). De sleutels van je kluis stel je apart in op Mijn
+  kluis.
 
 Wachtwoordlogin helemaal uitzetten: `VAULTX_LOCAL_LOGIN_ENABLED=false`. De loginpagina toont dan
 enkel Authentik en bestaande wachtwoorden werken niet meer (ze blijven wel bewaard).

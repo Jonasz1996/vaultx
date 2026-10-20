@@ -25,6 +25,7 @@ from app.repositories.vault import (
     VaultDeviceRepository,
     VaultFolderRepository,
 )
+from app.repositories.webauthn import WebAuthnCredentialRepository
 
 __all__ = [
     "AppLoginRepository",
@@ -46,6 +47,7 @@ __all__ = [
     "VaultCipherRepository",
     "VaultDeviceRepository",
     "VaultFolderRepository",
+    "WebAuthnCredentialRepository",
     "VaultNoteFileRepository",
     "VaultNoteRepository",
     "VaultNoteVersionRepository",

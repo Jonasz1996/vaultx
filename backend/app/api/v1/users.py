@@ -114,6 +114,8 @@ async def revoke_user_sessions(
     status_code=204,
     summary="Tweestapsverificatie van iemands kluis uitzetten (telefoon en herstelcode kwijt)",
 )
-async def reset_vault_two_factor(user_id: UUID, p: CurrentPrincipal, db: DbSession) -> Response:
-    await VaultService(db).admin_reset_two_factor(p, user_id)
+async def reset_vault_two_factor(
+    user_id: UUID, p: CurrentPrincipal, db: DbSession, settings: SettingsDep
+) -> Response:
+    await VaultService(db).admin_reset_two_factor(p, user_id, settings)
     return Response(status_code=204)

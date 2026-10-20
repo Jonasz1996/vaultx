@@ -64,7 +64,8 @@ async def token(request: Request, db: DbSession, settings: SettingsDep, meta: Me
         except ValueError:
             provider = None
         remember = _form_value(form, "twoFactorRemember") in ("1", "true", "True")
-        two_factor = TwoFactorInput(provider, token_2fa[:256], remember)
+        # Een antwoord van een beveiligingssleutel (provider 7) is JSON van enkele honderden bytes.
+        two_factor = TwoFactorInput(provider, token_2fa[:16384], remember)
     username = _form_value(form, "username")
     password = _form_value(form, "password")
     identifier = _form_value(form, "deviceIdentifier", "device_identifier")

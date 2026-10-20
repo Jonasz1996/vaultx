@@ -86,13 +86,15 @@ class VaultAccount(TimestampMixin, Base):
     totp_last_step: Mapped[int | None] = mapped_column(BigInteger)
     # SHA-256 van de herstelcode (160 bits willekeur, dus geen trage hash nodig).
     recovery_code_hash: Mapped[str | None] = mapped_column(String(64))
+    # Gezet zodra er een tweede stap is (authenticator-app en/of beveiligingssleutels,
+    # zie models/webauthn.py); leeg = geen tweestapsverificatie.
     two_factor_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     user = relationship("User")
 
     @property
     def two_factor_enabled(self) -> bool:
-        return self.totp_secret is not None
+        return self.two_factor_enabled_at is not None
 
 
 class VaultDevice(Base):

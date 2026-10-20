@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VaultX: beveiligingssleutel</title>
+    <link rel="icon" href="/favicon.svg" />
+    <link rel="stylesheet" href="/webauthn-connector.css" />
+  </head>
+  <body data-mode="connector">
+    <main class="card">
+      <img src="/favicon.svg" alt="" />
+      <h1>Bevestig met je beveiligingssleutel</h1>
+      <p>Je Bitwarden-app of -extensie vraagt de tweede stap voor je VaultX-kluis.</p>
+      <button type="button" id="webauthn-button">Beveiligingssleutel gebruiken</button>
+      <div id="msg" hidden></div>
+    </main>
+    <script src="/webauthn-connector.js"></script>
+  </body>
+</html>

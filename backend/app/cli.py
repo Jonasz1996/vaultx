@@ -2,7 +2,8 @@
 
     python -m app.cli create-user --username jonas --email jonas@example.com --admin
     python -m app.cli set-password jonas
-    python -m app.cli reset-vault-2fa jonas@example.com    # telefoon en herstelcode kwijt
+    python -m app.cli reset-vault-2fa jonas@example.com    # telefoon, sleutels en herstelcode kwijt
+    python -m app.cli reset-login-2fa jonas                # sleutel voor het wachtwoordlogin kwijt
     python -m app.cli import-linkwarden --dsn postgresql://linkwarden@db/linkwarden --to jonas
 
 Het wachtwoord wordt gevraagd (twee keer, zonder echo) of met --password-stdin van stdin gelezen.
@@ -103,14 +104,14 @@ async def reset_password(login: str, password: str) -> User:
 async def reset_vault_two_factor(email: str) -> str:
     """Tweestapsverificatie van een kluis uitzetten; het master password blijft nodig."""
     from app.repositories import VaultAccountRepository
-    from app.services.vault_auth import clear_two_factor, normalize_email
+    from app.services.vault_auth import clear_vault_two_factor, normalize_email
 
     async with get_sessionmaker()() as db:
         found = await VaultAccountRepository(db).by_email(normalize_email(email))
         account = await VaultAccountRepository(db).lock(found.user_id) if found else None
         if account is None or not account.two_factor_enabled:
             raise VaultXError(f"Geen kluis met tweestapsverificatie voor {email!r}")
-        clear_two_factor(account)
+        await clear_vault_two_factor(db, get_settings(), account)
         await AuditService(db).record(
             "vault.2fa.disable",
             Actor.system("cli", RequestMeta()),
@@ -120,6 +121,19 @@ async def reset_vault_two_factor(email: str) -> str:
         )
         await db.commit()
         return account.email
+
+
+async def reset_login_two_factor(login: str) -> str:
+    """Beveiligingssleutels voor het wachtwoordlogin weghalen; het wachtwoord blijft nodig."""
+    from app.services.password_login import LoginSecurityKeyService
+
+    async with get_sessionmaker()() as db:
+        user = await _find_user(db, login)
+        svc = LoginSecurityKeyService(db, get_settings())
+        if not await svc.keys(user.id):
+            raise VaultXError(f"{login!r} heeft geen beveiligingssleutels voor het wachtwoordlogin")
+        await svc.reset(user, Actor.system("cli", RequestMeta()))
+        return user.username or user.email or str(user.id)
 
 
 async def _find_user(db, login: str) -> User:
@@ -204,6 +218,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--password-stdin", action="store_true")
     t = sub.add_parser("reset-vault-2fa", help="Tweestapsverificatie van een kluis uitzetten")
     t.add_argument("email", help="E-mailadres van de kluis (login in de Bitwarden-apps)")
+    r = sub.add_parser("reset-login-2fa", help="Beveiligingssleutels voor het wachtwoordlogin weghalen")
+    r.add_argument("login", help="Gebruikersnaam of e-mailadres")
     li = sub.add_parser(
         "import-linkwarden",
         help="Links importeren uit een Linkwarden-database, Linkwarden-export (JSON) of bladwijzers (HTML)",
@@ -250,6 +266,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Fout: {exc.message}", file=sys.stderr)
             return 1
         print(f"OK: {email} logt in de Bitwarden-apps weer in met enkel het master password.")
+        return 0
+
+    if args.command == "reset-login-2fa":
+
+        async def run_login_reset() -> str:
+            try:
+                return await reset_login_two_factor(args.login)
+            finally:
+                await dispose_engine()
+
+        try:
+            name = asyncio.run(run_login_reset())
+        except VaultXError as exc:
+            print(f"Fout: {exc.message}", file=sys.stderr)
+            return 1
+        print(f"OK: {name} logt weer in met enkel het wachtwoord.")
         return 0
 
     async def run() -> User:

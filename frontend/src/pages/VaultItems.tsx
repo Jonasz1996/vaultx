@@ -31,7 +31,8 @@ import {
   type RawCipher,
   type SyncResponse,
 } from "../vault/items";
-import { TwoFactorRequired, useWebVault } from "../vault/webSession";
+import { TwoFactorRequired, useWebVault, type TwoFactorAnswer } from "../vault/webSession";
+import { getAssertion, webAuthnSupported } from "../webauthn";
 
 export function WebVault({ status }: { status: VaultStatus }) {
   const { key } = useWebVault();
@@ -44,26 +45,52 @@ export function WebVault({ status }: { status: VaultStatus }) {
 function WebUnlock({ status }: { status: VaultStatus }) {
   const { unlock, lockReason } = useWebVault();
   const [password, setPassword] = useState("");
-  const [needCode, setNeedCode] = useState(false);
+  const [challenge, setChallenge] = useState<TwoFactorRequired | null>(null);
+  const [useCode, setUseCode] = useState(false);
   const [code, setCode] = useState("");
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const keyPossible = !!challenge?.securityKey && webAuthnSupported();
+  const askCode = !!challenge && (useCode || !keyPossible);
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const attempt = async (answer?: TwoFactorAnswer) => {
     setBusy(true);
     setError(null);
     try {
-      await unlock(status, password, needCode ? { code, remember } : undefined);
+      await unlock(status, password, answer);
       setPassword("");
       setCode("");
+      setChallenge(null);
     } catch (err) {
-      if (err instanceof TwoFactorRequired && !needCode) setNeedCode(true);
-      else setError(err);
+      if (err instanceof TwoFactorRequired) {
+        // Eerste keer: vraag de tweede stap. Daarna: nieuwe challenge, en de fout tonen.
+        if (challenge) setError(new Error("Dat werd niet aanvaard. Probeer opnieuw."));
+        setChallenge(err);
+      } else setError(err);
     } finally {
       setBusy(false);
     }
+  };
+
+  const withKey = async () => {
+    if (!challenge?.securityKey) return;
+    setError(null);
+    let answer: Record<string, unknown>;
+    try {
+      answer = await getAssertion(challenge.securityKey);
+    } catch (err) {
+      setError(err);
+      return;
+    }
+    await attempt({ securityKey: answer, remember });
+  };
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!challenge) await attempt();
+    else if (askCode) await attempt({ code, remember });
+    else await withKey();
   };
 
   return (
@@ -86,30 +113,51 @@ function WebUnlock({ status }: { status: VaultStatus }) {
             onChange={(e) => setPassword(e.target.value)}
           />
         </label>
-        {needCode && (
-          <>
-            <label className="field">
-              <span>Code uit je authenticator-app of herstelcode</span>
-              <input
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                autoFocus
-                required
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-              />
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-              Deze browser 30 dagen onthouden
-            </label>
-          </>
+        {challenge && !askCode && (
+          <div className="info-box small">
+            Bevestig met je beveiligingssleutel of passkey: klik op de knop en raak je YubiKey aan als hij knippert.
+          </div>
+        )}
+        {challenge && !challenge.securityKey && status.security_keys.length > 0 && (
+          <div className="info-box small">
+            Je beveiligingssleutel werkt enkel op {status.security_keys_rp_id ?? "de domeinnaam van VaultX"}. Hier
+            kan je de code uit je authenticator-app of je herstelcode gebruiken.
+          </div>
+        )}
+        {askCode && (
+          <label className="field">
+            <span>{challenge.authenticator ? "Code uit je authenticator-app of herstelcode" : "Herstelcode"}</span>
+            <input
+              autoComplete="one-time-code"
+              autoFocus
+              required
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+          </label>
+        )}
+        {challenge && (
+          <label className="check">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            Deze browser 30 dagen onthouden
+          </label>
         )}
         <ErrorBox error={error} />
         <div className="form-actions">
-          <button className="btn btn-primary" disabled={busy || !password || (needCode && !code)}>
-            {busy ? "Sleutel afleiden…" : "Ontgrendelen"}
+          <button className="btn btn-primary" disabled={busy || !password || (askCode && !code)}>
+            {busy
+              ? challenge
+                ? "Controleren…"
+                : "Sleutel afleiden…"
+              : challenge && !askCode
+                ? "Beveiligingssleutel gebruiken"
+                : "Ontgrendelen"}
           </button>
+          {keyPossible && (
+            <button type="button" className="btn btn-ghost" onClick={() => setUseCode(!useCode)}>
+              {useCode ? "Toch met mijn sleutel" : "Code of herstelcode gebruiken"}
+            </button>
+          )}
         </div>
       </form>
     </Card>
