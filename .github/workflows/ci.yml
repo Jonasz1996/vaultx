@@ -321,7 +321,7 @@ jobs:
         env:
           VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
         run: python e2e/links_e2e.py notes-shots/links
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: notes-screenshots
