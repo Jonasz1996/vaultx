@@ -53,7 +53,7 @@ main() {
   echo "code was: $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse --short HEAD)"
 
   # Vanaf hier: bij een fout de vorige code en pakketten terug. VaultX is nog niet herstart.
-  # shellcheck disable=SC2329  # via trap ERR
+  # shellcheck disable=SC2317,SC2329  # via trap ERR
   rollback() {
     trap - ERR
     printf '\nFOUT bij het updaten: de vorige versie (%s) wordt teruggezet.\n' "$(git rev-parse --short "$OLD_SHA")" >&2
