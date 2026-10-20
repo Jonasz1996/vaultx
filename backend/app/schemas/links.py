@@ -1,10 +1,10 @@
 """Links, collecties en tags (fase 10)."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from app.schemas.common import ORMModel
 
@@ -31,15 +31,19 @@ def _check_url(v: str) -> str:
     return v
 
 
+# Spaties eraf vóór de lengtecontrole: een naam van enkel spaties is geen naam.
+CollectionName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+
+
 class CollectionIn(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
+    name: CollectionName
     description: str = Field("", max_length=10_000)
     color: str = Field("#0ea5e9", pattern=COLOR_PATTERN)
     parent_id: UUID | None = None
 
 
 class CollectionUpdate(BaseModel):
-    name: str | None = Field(None, min_length=1, max_length=255)
+    name: CollectionName | None = None
     description: str | None = Field(None, max_length=10_000)
     color: str | None = Field(None, pattern=COLOR_PATTERN)
     # Expliciet null = naar het hoogste niveau; weglaten = niet verplaatsen.

@@ -13,6 +13,7 @@ from app.schemas.vault import (
     VaultDeviceOut,
     VaultEnroll,
     VaultPasswordChange,
+    VaultReset,
     VaultStatusOut,
     VaultUnlock,
     VaultUnlockOut,
@@ -137,9 +138,13 @@ async def two_factor_disable(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.delete("", status_code=status.HTTP_204_NO_CONTENT, summary="Kluis met alle items verwijderen")
-async def reset(p: CurrentPrincipal, db: DbSession) -> Response:
-    await VaultService(db).reset(p)
+@router.post(
+    "/reset",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Kluis met alle items verwijderen (master password, of net opnieuw ingelogd)",
+)
+async def reset(body: VaultReset, p: CurrentPrincipal, db: DbSession, settings: SettingsDep) -> Response:
+    await VaultService(db).reset(p, body.master_password_hash, settings)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

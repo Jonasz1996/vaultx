@@ -202,7 +202,7 @@ async def test_vault_reset_logs_out(make_client, hub):
     ids = await device_ids(c, h)
     user_id = UUID((await c.get("/api/v1/me")).json()["id"])
     desktop = listen(hub, user_id, UUID(ids["desktop"]))
-    assert (await c.delete_("/api/v1/me/vault")).status_code == 204
+    assert (await c.post_json("/api/v1/me/vault/reset", {})).status_code == 204
     update, closed = await received(desktop, 2)
     assert update["Type"] == PushType.LOG_OUT and closed is None
 

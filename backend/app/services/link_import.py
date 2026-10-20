@@ -166,8 +166,8 @@ def parse_vaultx_json(data: dict[str, Any]) -> ImportData:
     for c in data.get("collections") or []:
         out.collections.append(
             ImportCollection(
-                key=c["id"],
-                name=c.get("name") or "Naamloos",
+                key=str(c["id"]),
+                name=(str(c.get("name") or "").strip()[:255]) or "Naamloos",
                 parent=c.get("parent_id"),
                 description=c.get("description") or "",
                 color=_color(c.get("color")),
@@ -465,6 +465,12 @@ class LinkImporter:
 
 
 def parse_upload(fmt: str, raw: str) -> ImportData:
-    if fmt == "bookmarks":
-        return parse_bookmarks_html(raw)
-    return parse_linkwarden_json(raw)
+    try:
+        if fmt == "bookmarks":
+            return parse_bookmarks_html(raw)
+        return parse_linkwarden_json(raw)
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        # Een bestand met een onverwachte vorm is een fout in de invoer, geen serverfout.
+        raise InvalidOperationError(
+            "Dit bestand heeft niet de verwachte vorm en kan niet geïmporteerd worden"
+        ) from exc

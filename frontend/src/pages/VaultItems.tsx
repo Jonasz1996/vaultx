@@ -386,6 +386,8 @@ function ItemIcon({ item }: { item: ItemView }) {
 
 // --------------------------------------------------------------------------- bekijken
 
+const CLIPBOARD_CLEAR_MS = 30_000;
+
 function useCopy() {
   const [copied, setCopied] = useState<string | null>(null);
   useEffect(() => {
@@ -396,6 +398,9 @@ function useCopy() {
   const copy = async (label: string, value: string) => {
     await navigator.clipboard.writeText(value);
     setCopied(label);
+    // Zoals Bitwarden: het klembord na 30 seconden leegmaken, zodat een gekopieerd wachtwoord
+    // of TOTP-code er niet blijft staan na het vergrendelen. Faalt stil zonder focus.
+    window.setTimeout(() => void navigator.clipboard.writeText("").catch(() => {}), CLIPBOARD_CLEAR_MS);
   };
   return { copied, copy };
 }

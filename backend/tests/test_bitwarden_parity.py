@@ -190,6 +190,25 @@ async def test_two_step_login_with_authenticator(make_client):
     assert (await token(c, account.email, account.password_hash, "dev-4")).status_code == 200
 
 
+async def test_disable_code_cannot_be_guessed(make_client, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "vault_max_failed_logins", 3)
+    c = await make_client()
+    account = await enroll(c, "jonas")
+    secret, _ = await _enable_2fa(c, account)
+    for guess in ("111111", "222222", "333333"):
+        body = {"master_password_hash": account.password_hash, "code": guess}
+        assert (await c.post_json("/api/v1/me/vault/2fa/disable", body)).status_code == 422
+    # Nu vergrendeld: ook de juiste code zet 2FA niet meer uit
+    from app.services import totp
+
+    body = {"master_password_hash": account.password_hash, "code": totp.code_at(secret)}
+    r = await c.post_json("/api/v1/me/vault/2fa/disable", body)
+    assert r.status_code == 403, r.text
+    assert (await c.get("/api/v1/me/vault")).json()["two_factor_enabled"] is True
+
+
 async def test_recovery_code_at_login_and_admin_reset(make_client, admin):
     from tests.test_vault import token
 

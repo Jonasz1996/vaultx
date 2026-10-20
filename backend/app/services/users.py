@@ -3,13 +3,14 @@ VaultX-wachtwoord) maakt een beheerder aan."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings
-from app.core.errors import ConflictError, InvalidOperationError, NotFoundError
+from app.core.errors import ConflictError, InvalidOperationError, NotFoundError, TooManyAttemptsError
 from app.core.security import verify_password
 from app.models import User, UserSession
 from app.repositories import MembershipRepository, UserRepository
@@ -220,7 +221,15 @@ class UserService:
             raise InvalidOperationError(
                 "Je account heeft geen VaultX-wachtwoord; vraag er een aan een beheerder"
             )
-        if not verify_password(data.current_password, user.password_hash or ""):
+        now = datetime.now(UTC)
+        if user.locked_until is not None and user.locked_until > now:
+            raise TooManyAttemptsError("Te veel foute pogingen. Probeer het over enkele minuten opnieuw.")
+        if not await run_in_threadpool(verify_password, data.current_password, user.password_hash or ""):
+            # Zelfde teller als bij inloggen: met een gestolen sessie raad je het wachtwoord niet.
+            user.failed_logins = (user.failed_logins or 0) + 1
+            if user.failed_logins >= self.settings.local_login_max_failed:
+                user.locked_until = now + timedelta(minutes=self.settings.local_login_lockout_minutes)
+                user.failed_logins = 0
             await self.audit.record(
                 "user.password_changed",
                 p.actor,
