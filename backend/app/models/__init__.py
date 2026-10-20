@@ -11,6 +11,7 @@ from app.models.catalog import (
     NpmChangeStatus,
     NpmConnection,
 )
+from app.models.links import Link, LinkArchive, LinkCollection, LinkTag, link_tag_map
 from app.models.membership import Membership, MembershipSource, OrgRole, TeamRole
 from app.models.notes import VaultNote, VaultNoteFile, VaultNoteVersion
 from app.models.organization import Organization, Team
@@ -28,6 +29,10 @@ __all__ = [
     "Base",
     "DiscoveredHost",
     "KdfType",
+    "Link",
+    "LinkArchive",
+    "LinkCollection",
+    "LinkTag",
     "Membership",
     "MembershipSource",
     "NpmChange",
@@ -47,4 +52,5 @@ __all__ = [
     "VaultNote",
     "VaultNoteFile",
     "VaultNoteVersion",
+    "link_tag_map",
 ]

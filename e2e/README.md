@@ -163,3 +163,17 @@ pip install playwright && playwright install chromium
 VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
   python e2e/notes_e2e.py ./notes-shots    # map voor screenshots is optioneel
 ```
+
+# End-to-end test fase 10: links in de browser
+
+`links_e2e.py` zet een nagebootste Linkwarden-database (in een eigen schema) met
+archiefbestanden klaar en importeert die met `python -m app.cli import-linkwarden`,
+importeert daarna een Linkwarden-export via de webinterface en controleert in Chromium:
+collectieboom, filteren op collectie, tag en vastgepind, zoeken in de gearchiveerde tekst,
+de gesaneerde leesbare versie, de screenshot, de sandbox op de volledige pagina, een
+collectie en link toevoegen, vastpinnen, bewerken en tags samenvoegen.
+
+```bash
+VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
+  python e2e/links_e2e.py ./notes-shots/links
+```

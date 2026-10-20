@@ -9,6 +9,7 @@ from app.repositories.catalog import (
     NpmChangeRepository,
     NpmConnectionRepository,
 )
+from app.repositories.links import LinkCollectionRepository, LinkRepository, LinkTagRepository
 from app.repositories.memberships import MembershipRepository
 from app.repositories.notes import (
     VaultNoteFileRepository,
@@ -31,6 +32,9 @@ __all__ = [
     "AuditRepository",
     "AuthentikProtectionRepository",
     "DiscoveredHostRepository",
+    "LinkCollectionRepository",
+    "LinkRepository",
+    "LinkTagRepository",
     "MembershipRepository",
     "NpmChangeRepository",
     "NpmConnectionRepository",
