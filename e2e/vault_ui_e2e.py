@@ -117,7 +117,8 @@ def main() -> None:
             page.get_by_label("Herhaal master password").fill(OLD_PW)
             page.get_by_label("Ik begrijp").check()
             page.get_by_role("button", name="Kluis activeren").click()
-            expect(page.get_by_text("Verbinden met een Bitwarden-app")).to_be_visible(timeout=30_000)
+            page.get_by_role("link", name="Apps, apparaten en beveiliging").click(timeout=30_000)
+            expect(page.get_by_text("Verbinden met een Bitwarden-app")).to_be_visible()
 
             step("Tweestapsverificatie instellen")
             card = page.locator(".card", has=page.get_by_role("heading", name="Tweestapsverificatie"))

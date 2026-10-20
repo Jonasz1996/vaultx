@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import qrcode from "qrcode-generator";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { NavLink } from "react-router";
 import { api } from "../api/client";
 import type { VaultStatus } from "../api/types";
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, Stat } from "../components/ui";
 import { formatDate, relative } from "../format";
+import { WebVault } from "./VaultItems";
 import {
   ARGON2_DEFAULTS,
   changeMasterPassword,
@@ -15,10 +17,12 @@ import {
 
 const BASE = "/api/v1/me/vault";
 
-export function VaultPage() {
+export function VaultPage({ tab = "items" }: { tab?: "items" | "settings" }) {
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ["vault"], queryFn: () => api.get<VaultStatus>(BASE) });
   const refresh = () => void qc.invalidateQueries({ queryKey: ["vault"] });
+  // Tellers en apparaten opnieuw ophalen bij het wisselen van tabblad (de webkluis wijzigt ze).
+  useEffect(() => void qc.invalidateQueries({ queryKey: ["vault"] }), [tab, qc]);
 
   if (status.isLoading) return <Loading />;
   if (!status.data) return <ErrorBox error={status.error} />;
@@ -27,9 +31,21 @@ export function VaultPage() {
     <>
       <PageHeader
         title="Mijn kluis"
-        subtitle="Persoonlijke wachtwoordkluis die werkt met de officiële Bitwarden®-apps, -extensies en -CLI."
+        subtitle="Persoonlijke wachtwoordkluis: hier in de browser, en met de officiële Bitwarden®-apps, -extensies en -CLI."
       />
-      {s.enrolled ? <Enrolled s={s} onChange={refresh} /> : <Enroll s={s} onDone={refresh} />}
+      {!s.enrolled ? (
+        <Enroll s={s} onDone={refresh} />
+      ) : (
+        <>
+          <nav className="page-tabs">
+            <NavLink to="/vault" end>
+              Items
+            </NavLink>
+            <NavLink to="/vault/settings">Apps, apparaten en beveiliging</NavLink>
+          </nav>
+          {tab === "items" ? <WebVault status={s} /> : <Enrolled s={s} onChange={refresh} />}
+        </>
+      )}
     </>
   );
 }

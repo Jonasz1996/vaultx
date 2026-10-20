@@ -241,7 +241,6 @@ export async function decryptText(encString: string, key: UserKey): Promise<stri
   return new TextDecoder().decode(await subtle().decrypt({ name: "AES-CBC", iv }, key.aes, ct));
 }
 
-/** Normalisatie zoals de clients: e-mailadres zonder spaties, kleine letters. */
 /** Bestand versleutelen als EncArrayBuffer (zoals Bitwarden-bijlagen): 2 | iv | mac | ct. */
 export async function encryptBytes(data: Uint8Array<ArrayBuffer>, key: UserKey): Promise<Uint8Array<ArrayBuffer>> {
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(16));
@@ -259,6 +258,45 @@ export async function decryptBytes(buf: Uint8Array<ArrayBuffer>, key: UserKey): 
   return new Uint8Array(await subtle().decrypt({ name: "AES-CBC", iv }, key.aes, ct));
 }
 
+/** Ruwe bytes uit een EncString (bv. een itemsleutel of bijlagesleutel). */
+export async function decryptToBytes(encString: string, key: UserKey): Promise<Uint8Array<ArrayBuffer>> {
+  const m = /^2\.([^|]+)\|([^|]+)\|([^|]+)$/.exec(encString);
+  if (!m) throw new Error("Onbekend versleutelingsformaat");
+  const [iv, ct, mac] = [fromB64(m[1]), fromB64(m[2]), fromB64(m[3])];
+  if (!(await subtle().verify("HMAC", key.mac, mac, concat(iv, ct)))) throw new Error("Gegevens zijn beschadigd of gewijzigd");
+  return new Uint8Array(await subtle().decrypt({ name: "AES-CBC", iv }, key.aes, ct));
+}
+
+/** Ruwe bytes versleutelen tot een EncString (type 2). */
+export async function encryptFromBytes(data: Uint8Array<ArrayBuffer>, key: UserKey): Promise<string> {
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const ct = new Uint8Array(await subtle().encrypt({ name: "AES-CBC", iv }, key.aes, data));
+  const mac = new Uint8Array(await subtle().sign("HMAC", key.mac, concat(iv, ct)));
+  return `2.${toB64(iv)}|${toB64(ct)}|${toB64(mac)}`;
+}
+
+/** 64 ruwe bytes (32 enc + 32 mac) als niet-exporteerbare sleutel; de bytes worden gewist. */
+export async function importSymmetricKey(raw: Uint8Array<ArrayBuffer>): Promise<UserKey> {
+  try {
+    if (raw.length !== 64) throw new Error("Onverwachte sleutellengte");
+    return {
+      aes: await subtle().importKey("raw", raw.slice(0, 32), "AES-CBC", false, ["encrypt", "decrypt"]),
+      mac: await subtle().importKey("raw", raw.slice(32, 64), { name: "HMAC", hash: "SHA-256" }, false, [
+        "sign",
+        "verify",
+      ]),
+    };
+  } finally {
+    raw.fill(0);
+  }
+}
+
+/** SHA-256 in base64, zoals de uriChecksum van Bitwarden. */
+export async function sha256B64(text: string): Promise<string> {
+  return toB64(await subtle().digest("SHA-256", enc.encode(text)));
+}
+
+/** Normalisatie zoals de clients: e-mailadres zonder spaties, kleine letters. */
 export function normalizeSalt(email: string): string {
   return email.trim().toLowerCase();
 }

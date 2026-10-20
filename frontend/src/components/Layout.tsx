@@ -3,6 +3,7 @@ import { logout } from "../api/client";
 import { useMe } from "../api/hooks";
 import { userLabel } from "../format";
 import { VaultKeyProvider } from "../notes/session";
+import { WebVaultProvider } from "../vault/webSession";
 
 const nav = [
   { to: "/", label: "Dashboard", end: true },
@@ -49,7 +50,9 @@ export function Layout() {
       </aside>
       <main className="content">
         <VaultKeyProvider>
-          <Outlet />
+          <WebVaultProvider>
+            <Outlet />
+          </WebVaultProvider>
         </VaultKeyProvider>
       </main>
     </div>
