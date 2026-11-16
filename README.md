@@ -12,6 +12,11 @@ gewoon account, naast Authentik), **fase 9** (wat de Bitwarden-apps nog
 misten tegenover Bitwarden en Vaultwarden) en **fase 10** (links bewaren zoals
 in Linkwarden).
 
+**Lees-API voor dashboards**
+
+- `GET /api/v1/stats` met een persoonlijke API-sleutel: aantal kluisitems per soort, ingelogde toestellen, sessies, gebruikers, apps uit NPM, links en logins van de laatste 24 uur. Enkel tellingen, nooit inhoud; de sleutel kan niets wijzigen en werkt nergens anders
+- Sleutels aanmaken en intrekken op je eigen account, met "laatst gebruikt"; CORS voor je dashboard via `VAULTX_DASHBOARD_ORIGINS`. Zie [docs/dashboard-api.md](docs/dashboard-api.md)
+
 **Fase 10 (eerste deel)**
 
 - "Links" in het menu: bladwijzers met titel, beschrijving en tags, in geneste collecties met een kleur, vastpinnen, zoeken (ook in de tekst van gearchiveerde pagina's) en filteren op collectie of tag, tags hernoemen en samenvoegen, export als JSON

@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import Annotated
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # http://192.168.0.50, kommagescheiden. Inloggen met een wachtwoord werkt op elk adres; voor
     # Authentik moet <origin>/auth/callback ook als redirect-URI in de provider staan.
     extra_origins: Annotated[list[str], NoDecode] = []
+    # Websites (origins) die de lees-API voor dashboards (/api/v1/stats) vanuit de browser mogen
+    # aanroepen, kommagescheiden, bv. https://dashboard.example.be. Leeg = enkel server-side
+    # (curl, een backend). Er gaan nooit cookies mee: enkel een API-sleutel in de header.
+    dashboard_origins: Annotated[list[str], NoDecode] = []
     # Beveiligingssleutels en passkeys (WebAuthn) horen bij een domeinnaam. Leeg = de host van
     # VAULTX_PUBLIC_URL. Werkt enkel op die naam (en subdomeinen), nooit op een IP-adres.
     webauthn_rp_id: str | None = None
@@ -133,9 +137,9 @@ class Settings(BaseSettings):
     def _strip_slash(cls, value: str) -> str:
         return value.rstrip("/")
 
-    @field_validator("extra_origins", mode="before")
+    @field_validator("extra_origins", "dashboard_origins", mode="before")
     @classmethod
-    def _split_origins(cls, value: object) -> object:
+    def _split_origins(cls, value: object, info: ValidationInfo) -> object:
         if isinstance(value, str):
             value = [o for o in value.split(",")]
         if isinstance(value, list):
@@ -146,7 +150,7 @@ class Settings(BaseSettings):
                     continue
                 origin = _origin(raw)
                 if not origin:
-                    raise ValueError(f"VAULTX_EXTRA_ORIGINS: geen geldig adres: {raw!r}")
+                    raise ValueError(f"VAULTX_{info.field_name.upper()}: geen geldig adres: {raw!r}")
                 origins.append(origin)
             return origins
         return value
