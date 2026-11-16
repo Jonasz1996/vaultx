@@ -94,7 +94,7 @@ jobs:
 
   authentik-e2e:
     # Fase 4: VaultX maakt de Authentik-kant zelf aan, tegen echte Authentik en NPM (zie e2e/README.md)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright 1.56 kent ubuntu 26.04 (ubuntu-latest) nog niet
     services:
       postgres:
         image: postgres:18-alpine
@@ -170,7 +170,7 @@ jobs:
 
   autologin-e2e:
     # Fase 5: automatische login via Authentik, tegen echte Authentik met een test-app in de browser (zie e2e/README.md)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # zie hierboven
     services:
       postgres:
         image: postgres:18-alpine
@@ -269,7 +269,7 @@ jobs:
 
   notes-e2e:
     # Fase 7: notities in een echte browser, plus controle dat de database enkel versleutelde tekst bevat
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # zie hierboven
     services:
       postgres:
         image: postgres:18-alpine

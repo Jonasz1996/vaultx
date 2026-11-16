@@ -10,6 +10,7 @@ from app.api.v1 import (
     notes,
     npm,
     organizations,
+    stats,
     users,
     vault,
 )
@@ -26,3 +27,4 @@ api_router.include_router(npm.router)
 api_router.include_router(authentik.router)
 api_router.include_router(app_login.router)
 api_router.include_router(audit.router)
+api_router.include_router(stats.router)

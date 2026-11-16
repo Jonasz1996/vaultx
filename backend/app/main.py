@@ -11,6 +11,7 @@ from app.api import auth, bitwarden, health
 from app.api.v1 import api_router
 from app.core.config import get_settings
 from app.core.context import RequestIdMiddleware
+from app.core.cors import DashboardCORSMiddleware
 from app.core.db import dispose_engine
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging
@@ -60,6 +61,7 @@ def create_app() -> FastAPI:
         openapi_url="/api/openapi.json",
     )
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(DashboardCORSMiddleware, origins=settings.dashboard_origins)
     install_error_handlers(app)
     app.include_router(health.router)
     app.include_router(auth.router)
