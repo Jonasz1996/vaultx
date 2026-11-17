@@ -106,7 +106,13 @@ class OIDCProvider:
     # ------------------------------------------------------------------ login flow
 
     async def authorization_url(
-        self, *, state: str, nonce: str, code_challenge: str, redirect_uri: str | None = None
+        self,
+        *,
+        state: str,
+        nonce: str,
+        code_challenge: str,
+        redirect_uri: str | None = None,
+        prompt: str | None = None,
     ) -> str:
         meta = await self.metadata()
         params = {
@@ -119,6 +125,8 @@ class OIDCProvider:
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
         }
+        if prompt:
+            params["prompt"] = prompt
         return f"{meta['authorization_endpoint']}?{urlencode(params)}"
 
     async def exchange_code(

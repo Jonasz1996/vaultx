@@ -61,6 +61,38 @@ De synchronisatie gebeurt bij **elke login**. Lidmaatschappen uit groepen
 lidmaatschappen (bron "Manueel") laat de synchronisatie altijd ongemoeid.
 Uitzetten kan met `VAULTX_OIDC_GROUP_SYNC=false`.
 
+## Meteen ingelogd
+
+Ben je al bij Authentik aangemeld, dan zit je zonder klik in VaultX. Opent een
+browser zonder VaultX-sessie een pagina, dan:
+
+1. probeert VaultX eerst **stil** bij Authentik (`prompt=none`). Is de browser
+   daar aangemeld, dan komt hij meteen terug en is hij binnen, zonder
+   Authentik-scherm;
+2. antwoordt Authentik `login_required` (niet aangemeld), dan:
+   - met de gewone login aan (`VAULTX_LOCAL_LOGIN_ENABLED=true`, standaard):
+     de loginpagina, met het formulier en de knop "Inloggen met Authentik";
+   - met `VAULTX_OIDC_AUTO_REDIRECT=true` (standaard aan als de gewone login
+     uit staat): meteen het aanmelden bij Authentik, en daarna terug naar de
+     pagina die je opende.
+
+Een stille poging die niet lukt, is geen fout en komt niet in de auditlog. De
+loginpagina doet hoogstens twee automatische pogingen per minuut, zodat er
+nooit een lus tussen VaultX en Authentik ontstaat.
+
+**Noodtoegang:** `https://vaultx.example.be/login?lokaal=1` toont altijd de
+gewone loginpagina, zonder door te sturen. Ligt Authentik plat, dan toont de
+loginpagina "Authentik is momenteel niet bereikbaar" en werkt de gewone login
+gewoon verder. In Authentik zelf hoeft niets te veranderen; dit werkt enkel op
+adressen waarop Authentik-login kan (`VAULTX_PUBLIC_URL` en
+`VAULTX_EXTRA_ORIGINS`), op andere adressen (bv. het LAN-IP) stuurt VaultX
+nooit door.
+
+| Instelling | Standaard | Betekenis |
+|---|---|---|
+| `VAULTX_OIDC_SILENT_LOGIN` | `true` | eerst stil proberen (prompt=none) |
+| `VAULTX_OIDC_AUTO_REDIRECT` | leeg = aan als de gewone login uit staat | zonder Authentik-sessie meteen naar het aanmelden |
+
 ## Uitloggen
 
 - Uitloggen in VaultX trekt de VaultX-sessie in en stuurt de browser naar het

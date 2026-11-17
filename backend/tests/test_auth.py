@@ -231,7 +231,8 @@ async def test_login_on_extra_origin_stays_there(make_client, fake_oidc):
 
 async def test_authentik_login_on_unknown_origin_does_not_jump_to_public_url(make_client):
     c = await make_client("http://192.168.1.50")
-    assert (await c.get("/auth/methods")).json() == {"authentik": False, "password": True}
+    m = (await c.get("/auth/methods")).json()
+    assert m == {"authentik": False, "password": True, "silent": False, "auto_redirect": False}
     r = await c.get("/auth/login", params={"next": "/vault"})
     assert r.status_code == 303
     assert r.headers["location"] == "/login?error=authentik_not_here&next=%2Fvault"

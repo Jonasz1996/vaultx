@@ -177,3 +177,20 @@ collectie en link toevoegen, vastpinnen, bewerken en tags samenvoegen.
 VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
   python e2e/links_e2e.py ./notes-shots/links
 ```
+
+# Meteen ingelogd via Authentik (echte Authentik, Chromium)
+
+`sso_e2e.py` maakt in Authentik (met het beheertoken) een OAuth2/OpenID-provider
+en applicatie voor VaultX zelf en start de backend met de gebouwde
+webinterface. Het controleert: zonder Authentik-sessie een stille poging
+(`prompt=none`) en dan de loginpagina (geen lus, geen mislukte login in de
+auditlog); aangemeld bij Authentik meteen binnen zonder klik en zonder
+aanmeldstap; `/login?lokaal=1` stuurt nooit door; met de gewone login uit meteen
+naar het aanmelden bij Authentik; en met Authentik onbereikbaar werkt de
+loginpagina nog.
+
+```bash
+cd frontend && npm ci && npm run build && cd ..
+VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
+  python e2e/sso_e2e.py --authentik http://localhost:9000 --authentik-token <beheertoken> ./sso-shots
+```

@@ -35,6 +35,10 @@ class FakeOIDCProvider:
         self.codes: dict[str, dict[str, Any]] = {}
         self.next_claims: dict[str, Any] = {}
         self.sid_counter = 0
+        # Of de "browser" al aangemeld is bij de provider (antwoord op prompt=none). None = zoals
+        # Authentik: aangemeld als deze browser eerder een gewone aanmelding deed (cookie).
+        self.logged_in: bool | None = None
+        self.prompts: list[str | None] = []
         self._server: uvicorn.Server | None = None
 
     # -------------------------------------------------------------- tokens
@@ -90,6 +94,11 @@ class FakeOIDCProvider:
         q = request.query_params
         assert q["client_id"] == self.client_id
         assert q["code_challenge_method"] == "S256"
+        self.prompts.append(q.get("prompt"))
+        session = request.cookies.get("fake_idp") == "1" if self.logged_in is None else self.logged_in
+        if q.get("prompt") == "none" and not session:
+            error = {"error": "login_required", "state": q["state"]}
+            return RedirectResponse(f"{q['redirect_uri']}?{urlencode(error)}", 302)
         code = secrets.token_urlsafe(16)
         self.sid_counter += 1
         self.codes[code] = {
@@ -99,7 +108,9 @@ class FakeOIDCProvider:
             "redirect_uri": q["redirect_uri"],
             "sid": f"sid-{self.sid_counter}",
         }
-        return RedirectResponse(f"{q['redirect_uri']}?{urlencode({'code': code, 'state': q['state']})}", 302)
+        resp = RedirectResponse(f"{q['redirect_uri']}?{urlencode({'code': code, 'state': q['state']})}", 302)
+        resp.set_cookie("fake_idp", "1", path="/")
+        return resp
 
     async def token(self, request: Request) -> JSONResponse:
         auth = request.headers.get("authorization", "")

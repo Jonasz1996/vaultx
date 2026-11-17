@@ -37,6 +37,14 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 STATE_COOKIE = "vaultx_oidc"
 STATE_MAX_AGE = 600
+# Antwoorden van Authentik op een stille poging (prompt=none) die enkel betekenen: "hier moet de
+# gebruiker zelf iets doen". Geen fout, dan volgt gewoon het echte aanmelden.
+SILENT_LOGIN_ERRORS = {
+    "login_required",
+    "consent_required",
+    "interaction_required",
+    "account_selection_required",
+}
 
 
 def _serializer(settings: Settings) -> URLSafeTimedSerializer:
@@ -106,8 +114,17 @@ def _authentik_origin(request: Request, settings: Settings) -> str | None:
 
 
 @router.get("/login", summary="Start login bij Authentik")
-async def login(request: Request, settings: SettingsDep, oidc: OIDCDep, next: str | None = None) -> Response:
+async def login(
+    request: Request,
+    settings: SettingsDep,
+    oidc: OIDCDep,
+    next: str | None = None,
+    silent: bool = False,
+) -> Response:
+    """Naar Authentik. Met ``silent=1`` eerst stil (prompt=none): wie daar al aangemeld is, komt
+    zonder klik terug; anders volgt het echte aanmelden of de loginpagina (zie callback)."""
     next = safe_next(next)
+    silent = silent and settings.oidc_silent_login
     origin = _authentik_origin(request, settings)
     if origin is None:
         # Authentik stuurt enkel terug naar een geregistreerde redirect-URI. Niet stilletjes naar
@@ -118,14 +135,20 @@ async def login(request: Request, settings: SettingsDep, oidc: OIDCDep, next: st
     state, nonce, verifier = new_token(), new_token(), new_token(48)
     try:
         url = await oidc.authorization_url(
-            state=state, nonce=nonce, code_challenge=pkce_challenge(verifier), redirect_uri=redirect_uri
+            state=state,
+            nonce=nonce,
+            code_challenge=pkce_challenge(verifier),
+            redirect_uri=redirect_uri,
+            prompt="none" if silent else None,
         )
     except OIDCError:
         return _error_redirect("idp_unreachable", next)
     resp = RedirectResponse(url, status_code=303)
     resp.set_cookie(
         STATE_COOKIE,
-        _serializer(settings).dumps({"s": state, "n": nonce, "v": verifier, "next": next, "r": redirect_uri}),
+        _serializer(settings).dumps(
+            {"s": state, "n": nonce, "v": verifier, "next": next, "r": redirect_uri, "q": silent}
+        ),
         max_age=STATE_MAX_AGE,
         path="/auth",
         httponly=True,
@@ -168,6 +191,21 @@ async def callback(
         # kan iedereen zonder login die (gehashte, append-only) log volschrijven.
         log.info("OIDC-callback zonder geldige state-cookie (error=%r)", (error or "")[:40])
         return _error_redirect("idp_error" if error else "invalid_state")
+    if error and saved.get("q"):
+        # Stille poging: niet aangemeld bij Authentik. Geen fout en niet in de auditlog. Meteen
+        # het echte aanmelden, of (met de gewone login aan) de loginpagina zonder nieuwe poging.
+        # Ook bij een ander antwoord: het echte aanmelden toont dan zelf wat er mis is.
+        if error not in SILENT_LOGIN_ERRORS:
+            log.info("Stille Authentik-login: onverwacht antwoord %r", error[:40])
+        if settings.oidc_auto_redirect_enabled:
+            resp = RedirectResponse(f"/auth/login?{urlencode({'next': saved['next']})}", status_code=303)
+        else:
+            query = {"stil": "1"}
+            if saved["next"] != "/":
+                query["next"] = saved["next"]
+            resp = RedirectResponse(f"/login?{urlencode(query)}", status_code=303)
+        resp.delete_cookie(STATE_COOKIE, path="/auth")
+        return resp
     if error:
         # Enkel een OAuth-foutcode (bv. access_denied) bewaren, geen vrije tekst van de aanroeper.
         return await fail("idp_error", error if re.fullmatch(r"[a-z_]{1,40}", error) else "other")
@@ -227,9 +265,14 @@ def _session_cookie(resp: Response, request: Request, settings: Settings, token:
 @router.get("/methods", summary="Welke loginmethodes de loginpagina toont")
 async def methods(request: Request, settings: SettingsDep) -> dict:
     # Geen verbinding met Authentik nodig: de loginpagina laadt ook als Authentik of NPM plat ligt.
+    authentik = _authentik_origin(request, settings) is not None
     return {
-        "authentik": _authentik_origin(request, settings) is not None,
+        "authentik": authentik,
         "password": settings.local_login_enabled,
+        # De loginpagina stuurt meteen door: eerst stil (prompt=none), en/of naar het aanmelden.
+        # Met /login?lokaal=1 doet ze dat nooit (noodtoegang als Authentik plat ligt).
+        "silent": authentik and settings.oidc_silent_login,
+        "auto_redirect": authentik and settings.oidc_auto_redirect_enabled,
     }
 
 
