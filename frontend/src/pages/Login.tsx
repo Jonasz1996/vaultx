@@ -16,6 +16,30 @@ const errors: Record<string, string> = {
 interface Methods {
   authentik: boolean;
   password: boolean;
+  /** Eerst stil bij Authentik proberen (prompt=none): wie daar aangemeld is, zit meteen binnen. */
+  silent?: boolean;
+  /** Zonder Authentik-sessie meteen naar het aanmelden bij Authentik, zonder knop. */
+  auto_redirect?: boolean;
+}
+
+// Hoogstens twee automatische pogingen per minuut, ook als er onderweg iets misloopt (bv. een
+// sessiecookie die de browser niet bewaart): nooit een lus tussen VaultX en Authentik.
+const AUTO_KEY = "vaultx.autoLogin";
+const AUTO_WINDOW_MS = 60_000;
+const AUTO_MAX = 2;
+
+function autoAllowed(): boolean {
+  try {
+    const now = Date.now();
+    const recent = (JSON.parse(sessionStorage.getItem(AUTO_KEY) ?? "[]") as number[]).filter(
+      (t) => typeof t === "number" && now - t < AUTO_WINDOW_MS,
+    );
+    if (recent.length >= AUTO_MAX) return false;
+    sessionStorage.setItem(AUTO_KEY, JSON.stringify([...recent, now]));
+  } catch {
+    // Geen sessionStorage: toch proberen, de server stuurt hoogstens één keer door.
+  }
+  return true;
 }
 
 /** Wachtwoord klopt, nu nog de beveiligingssleutel (of de herstelcode). */
@@ -29,20 +53,52 @@ export function LoginPage() {
   const [params] = useSearchParams();
   const error = params.get("error");
   const next = params.get("next") ?? "/";
-  const [methods, setMethods] = useState<Methods>({ authentik: true, password: false });
+  const [methods, setMethods] = useState<Methods | null>(null);
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
   const [loginError, setLoginError] = useState<unknown>(null);
   const [step, setStep] = useState<SecondStep | null>(null);
   const [recovery, setRecovery] = useState<string | null>(null);
+  const [redirecting, setRedirecting] = useState(false);
+  // ?lokaal=1: altijd de gewone loginpagina, nooit doorsturen (noodtoegang als Authentik plat ligt).
+  const local = params.has("lokaal");
 
   useEffect(() => {
     api
       .get<Methods>("/auth/methods")
-      .then(setMethods)
-      .catch(() => undefined);
+      .then((m) => {
+        const quiet = local || error || params.get("logged_out") || params.get("stil");
+        if (!quiet && (m.silent || m.auto_redirect) && autoAllowed()) {
+          setRedirecting(true);
+          const query = new URLSearchParams({ next });
+          if (m.silent) query.set("silent", "1");
+          window.location.replace(`/auth/login?${query}`);
+          return;
+        }
+        setMethods(m);
+      })
+      .catch(() => setMethods({ authentik: true, password: false }));
   }, []);
+
+  if (!methods) {
+    return (
+      <div className="login">
+        <div className="login-card">
+          <img src="/favicon.svg" alt="" width={48} height={48} />
+          <h1>VaultX</h1>
+          <p className="muted" role="status">
+            {redirecting ? "Aanmelden via Authentik…" : "Laden…"}
+          </p>
+          {redirecting && (
+            <a className="btn btn-ghost btn-wide" href={`/login?lokaal=1&next=${encodeURIComponent(next)}`}>
+              Toch zelf inloggen
+            </a>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -107,6 +163,11 @@ export function LoginPage() {
               : "Beheeromgeving. Je logt in met je Authentik-account."}
         </p>
         {params.get("logged_out") && <div className="info-box">Je bent uitgelogd.</div>}
+        {local && methods.authentik && (methods.silent || methods.auto_redirect) && (
+          <div className="info-box small">
+            Noodtoegang: VaultX stuurt je hier niet automatisch naar Authentik.
+          </div>
+        )}
         {error && <div className="error-box">{errors[error] ?? `Login mislukt (${error}).`}</div>}
         {step && (
           <form

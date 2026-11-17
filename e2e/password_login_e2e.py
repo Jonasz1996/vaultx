@@ -144,7 +144,7 @@ def main() -> None:
             step("Carol: fout wachtwoord, daarna juist")
             carol = new_page()
             carol.goto(f"{ui}/vault")
-            expect(carol).to_have_url(f"{ui}/login?next=%2Fvault")
+            expect(carol).to_have_url(f"{ui}/login?stil=1&next=%2Fvault")
             expect(carol.get_by_role("link", name="Inloggen met Authentik")).to_be_visible()
             shot(carol, "04-loginpagina")
             carol.get_by_label("Gebruikersnaam of e-mail").fill("carol")

@@ -31,7 +31,8 @@ async def pw_login(client, login, password=PW, next=None):
 
 async def test_methods_endpoint(make_client):
     c = await make_client()
-    assert (await c.get("/auth/methods")).json() == {"authentik": True, "password": True}
+    m = (await c.get("/auth/methods")).json()
+    assert m["authentik"] is True and m["password"] is True
 
 
 async def test_admin_creates_account_and_user_logs_in(admin, make_client):

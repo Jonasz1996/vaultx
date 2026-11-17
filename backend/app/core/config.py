@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     oidc_group_sync: bool = True
     oidc_group_prefix: str = "vaultx:"
     oidc_http_timeout_seconds: float = 10.0
+    # Wie VaultX zonder sessie opent, gaat meteen naar Authentik in plaats van eerst de knop
+    # "Inloggen met Authentik" te zien. Leeg = aan als de gewone login (VAULTX_LOCAL_LOGIN_ENABLED)
+    # uit staat. Met /login?lokaal=1 blijft de gewone loginpagina altijd bereikbaar (noodtoegang).
+    oidc_auto_redirect: bool | None = None
+    # Eerst stil proberen bij Authentik (prompt=none): ben je daar al aangemeld, dan zit je meteen
+    # in VaultX, zonder klik. Antwoordt Authentik "login_required", dan pas het echte aanmelden
+    # (met VAULTX_OIDC_AUTO_REDIRECT) of de loginpagina.
+    oidc_silent_login: bool = True
     oidc_verify_tls: bool = True
 
     # Sessies
@@ -196,6 +204,12 @@ class Settings(BaseSettings):
                 "VAULTX_AUTHENTIK_VERIFY_TLS=false: TLS van de Authentik-API wordt niet gecontroleerd"
             )
         return found
+
+    @property
+    def oidc_auto_redirect_enabled(self) -> bool:
+        if self.oidc_auto_redirect is not None:
+            return self.oidc_auto_redirect
+        return not self.local_login_enabled
 
     @property
     def discovery_url(self) -> str:
