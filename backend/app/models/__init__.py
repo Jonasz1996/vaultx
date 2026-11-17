@@ -12,6 +12,7 @@ from app.models.catalog import (
     NpmChangeStatus,
     NpmConnection,
 )
+from app.models.device_unlock import VaultDeviceUnlock
 from app.models.links import Link, LinkArchive, LinkCollection, LinkTag, link_tag_map
 from app.models.membership import Membership, MembershipSource, OrgRole, TeamRole
 from app.models.notes import VaultNote, VaultNoteFile, VaultNoteVersion
@@ -51,6 +52,7 @@ __all__ = [
     "VaultAttachment",
     "VaultCipher",
     "VaultDevice",
+    "VaultDeviceUnlock",
     "VaultFolder",
     "WebAuthnCredential",
     "VaultNote",

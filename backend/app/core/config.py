@@ -133,6 +133,13 @@ class Settings(BaseSettings):
     vault_note_file_max_mb: int = Field(25, ge=1, le=512)
     vault_note_storage_mb: int = Field(1024, ge=1)
 
+    # Ontgrendelen met Authentik (VaultX Invuller, docs/invuller.md): de extensie bewaart een
+    # apparaatsleutel, VaultX de user key versleuteld daarmee. Openen kan enkel met een
+    # VaultX-sessie via Authentik die jonger is dan het maximum en (standaard) met MFA.
+    device_unlock: bool = True
+    device_unlock_require_mfa: bool = True
+    device_unlock_max_auth_age_hours: int = Field(12, ge=1, le=24 * 30)
+
     @field_validator("oidc_admin_groups", mode="before")
     @classmethod
     def _split_groups(cls, value: object) -> object:

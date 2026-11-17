@@ -229,8 +229,12 @@ async function unlockWithPassword(password) {
   return { ok: true };
 }
 
-async function setUnlocked(userKey) {
-  await session.set("unlock", { key: VXBw.toB64(userKey), at: Date.now() });
+async function setUnlocked(userKey, via = "password") {
+  await session.set("unlock", { key: VXBw.toB64(userKey), at: Date.now(), via });
+  await ext.storage.session.remove(["lockReason", "manualLock"]);
+  // Na een ontgrendeling met het master password: dit apparaat ook laten ontgrendelen met
+  // Authentik (als dat kan). Op de achtergrond; mislukt het, dan blijft alles gewoon werken.
+  if (via === "password") registerDevice(userKey.slice()).catch(() => undefined);
   userKey.fill(0);
   cache = null;
   ext.alarms.create("lock", { when: Date.now() + LOCK_AFTER_MS });
@@ -247,20 +251,202 @@ async function userKey() {
   return VXBw.fromB64(u.key);
 }
 
-async function lock() {
+async function lock(reason, { manual = false } = {}) {
   await ext.storage.session.remove("unlock");
+  if (reason) await session.set("lockReason", reason);
+  // Zelf vergrendeld: niet meteen weer openen met Authentik, pas na een klik op de knop.
+  if (manual) await session.set("manualLock", true);
   cache = null;
   pending.clear();
 }
 
 async function logout() {
   try {
+    const du = await local.get("deviceUnlock");
+    if (du) await webRequest("DELETE", `${UNLOCK_API}/${du.id}`).catch(() => undefined);
+    await local.remove("deviceUnlock");
+    await local.remove("deviceUnlockInfo");
     await ext.storage.session.clear();
     await local.remove("auth");
     await local.remove("vault");
   } finally {
     cache = null;
     disconnectHub();
+  }
+}
+
+// ------------------------------------------------------------------ ontgrendelen met Authentik
+//
+// De helft van de sleutel op dit apparaat (D, enkel in storage.local), de helft in VaultX (de
+// user key versleuteld met D). Openen vraagt een VaultX-sessie die via Authentik begon, met MFA.
+// De extensie gebruikt de sessie van de browser (cookie); is die er niet, dan meldt ze zich stil
+// aan via Authentik (prompt=none), net zoals de VaultX-webpagina. Lukt dat niet (Authentik plat,
+// geen MFA, apparaat ingetrokken), dan vraagt ze gewoon het master password.
+
+const UNLOCK_API = "/api/v1/vault/device-unlock";
+let lastAuthentikTry = 0;
+
+/** Request naar VaultX met de browsersessie (cookie), niet met het Bitwarden-token. */
+async function webRequest(method, path, body) {
+  const res = await fetch(`${await serverUrl()}${path}`, {
+    method,
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "X-VaultX-CSRF": "1",
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!res.ok) throw new ApiError(res.status, data?.detail || `Fout ${res.status}`, data);
+  return data;
+}
+
+/**
+ * Stil aanmelden bij VaultX via Authentik (prompt=none) in een tabblad op de achtergrond. Een
+ * gewone fetch kan dat niet: de cookies van een login over twee sites heen (VaultX -> Authentik ->
+ * VaultX) bewaart de browser enkel bij een echte navigatie. Het tabblad toont nooit het
+ * aanmeldscherm van Authentik (silent=only) en sluit vanzelf.
+ */
+async function silentLogin() {
+  const server = await serverUrl();
+  const url = `${server}/auth/login?silent=only&next=${encodeURIComponent("/api/v1/me")}`;
+  const tab = await ext.tabs.create({ url, active: false });
+  try {
+    await new Promise((resolve) => {
+      const done = () => {
+        ext.tabs.onUpdated.removeListener(listener);
+        clearTimeout(timer);
+        resolve();
+      };
+      const listener = (id, info, t) => {
+        if (id !== tab.id || !t.url || info.status !== "complete") return;
+        const u = new URL(t.url);
+        if (u.origin === new URL(server).origin && !u.pathname.startsWith("/auth/")) done();
+      };
+      const timer = setTimeout(done, 20_000);
+      ext.tabs.onUpdated.addListener(listener);
+    });
+  } finally {
+    await ext.tabs.remove(tab.id).catch(() => undefined);
+  }
+}
+
+/** Zelfde als webRequest, maar zonder sessie eerst stil aanmelden via Authentik. */
+async function withWebSession(method, path, body) {
+  try {
+    return await webRequest(method, path, body);
+  } catch (err) {
+    if (err.status !== 401) throw err;
+  }
+  await silentLogin();
+  return webRequest(method, path, body);
+}
+
+async function registerDevice(userKey) {
+  try {
+    const existing = await local.get("deviceUnlock");
+    if (existing) return;
+    const st = await withWebSession("GET", UNLOCK_API);
+    if (!st?.eligible) {
+      await local.set("deviceUnlockInfo", { reason: st?.reason, message: st?.message, at: Date.now() });
+      return;
+    }
+    const d = crypto.getRandomValues(new Uint8Array(64));
+    const blob = await VXBw.encryptBytes(userKey, d);
+    const name = browserName();
+    const res = await webRequest("POST", UNLOCK_API, {
+      device_identifier: await deviceId(),
+      name: `VaultX Invuller (${name[0].toUpperCase()}${name.slice(1)})`,
+      blob,
+    });
+    await local.set("deviceUnlock", { id: res.id, key: VXBw.toB64(d) });
+    await local.remove("deviceUnlockInfo");
+    d.fill(0);
+  } catch (err) {
+    const message =
+      err?.status === 401
+        ? "niet aangemeld bij VaultX via Authentik. Meld je aan en ontgrendel opnieuw."
+        : err?.message || String(err);
+    await local.set("deviceUnlockInfo", { message, at: Date.now() });
+  } finally {
+    userKey.fill(0);
+  }
+}
+
+/**
+ * Kluis openen met Authentik. Geeft true als het lukte. Loopt er al een poging (bv. het
+ * popupvenster en een formulier tegelijk), dan wacht deze op dezelfde.
+ * force: niet wachten op de pauze van 60 s; explicit: ook na zelf vergrendelen (de knop).
+ */
+let authentikUnlocking = null;
+function unlockWithAuthentik(opts = {}) {
+  if (!authentikUnlocking) {
+    authentikUnlocking = tryAuthentikUnlock(opts).finally(() => {
+      authentikUnlocking = null;
+    });
+  }
+  return authentikUnlocking;
+}
+
+async function tryAuthentikUnlock({ force = false, explicit = false } = {}) {
+  const du = await local.get("deviceUnlock");
+  if (!du || (await session.get("unlock"))) return Boolean(du && (await session.get("unlock")));
+  if (!explicit && (await session.get("manualLock"))) return false;
+  if (!force && Date.now() - lastAuthentikTry < 60_000) return false;
+  lastAuthentikTry = Date.now();
+  let res;
+  try {
+    res = await withWebSession("POST", `${UNLOCK_API}/${du.id}/open`, {});
+  } catch (err) {
+    if (err.status === 403 || err.status === 404) {
+      await local.set("deviceUnlockInfo", { message: err.message, at: Date.now() });
+      // Ingetrokken of weg: de apparaatsleutel is waardeloos geworden.
+      if (err.status === 404 || /ingetrokken/i.test(err.message)) await local.remove("deviceUnlock");
+    }
+    return false;
+  }
+  const d = VXBw.fromB64(du.key);
+  try {
+    const userKey = await VXBw.decryptBytes(res.blob, d);
+    if (userKey.length !== 64) throw new Error("Onverwachte sleutel");
+    await local.remove("deviceUnlockInfo");
+    await setUnlocked(userKey, "authentik");
+    sync().catch(() => undefined);
+    return true;
+  } catch {
+    await local.remove("deviceUnlock");
+    return false;
+  } finally {
+    d.fill(0);
+  }
+}
+
+/**
+ * Ontgrendeld via Authentik: blijft dat zo? Eindigde de Authentik-sessie (afmelden, back-channel
+ * logout) of werd het apparaat ingetrokken, dan vergrendelt de extensie. Is VaultX gewoon
+ * onbereikbaar, dan niet (standalone).
+ */
+async function checkAuthentikUnlock() {
+  const u = await session.get("unlock");
+  const du = await local.get("deviceUnlock");
+  if (!u || u.via !== "authentik" || !du) return;
+  try {
+    const st = await withWebSession("GET", `${UNLOCK_API}/${du.id}`);
+    if (!st.active || !st.eligible) await lock(st.message || "Ontgrendelen met Authentik geldt niet meer.");
+  } catch (err) {
+    if (err.status === 401) await lock("Je bent afgemeld bij Authentik.");
+    else if (err.status === 404) {
+      await local.remove("deviceUnlock");
+      await lock("Dit apparaat werd ingetrokken.");
+    }
   }
 }
 
@@ -423,7 +609,8 @@ async function recordFailure(item, sender) {
 /** De content script meldt een loginformulier (stap username, password of totp). */
 async function onForm(msg, sender) {
   if (!(await frameIsTrusted(sender))) return { mode: "none", reason: "frame" };
-  const all = await items();
+  let all = await items();
+  if (!all && (await unlockWithAuthentik())) all = await items();
   if (!all) return { mode: "locked" };
   const stage = msg.stage;
   let candidates = VXMatch.matchingItems(all, sender.url);
@@ -482,8 +669,15 @@ async function status() {
   const cfg = (await local.get("cfg")) || {};
   const auth = await local.get("auth");
   const vault = await local.get("vault");
-  const unlocked = Boolean(await userKey());
+  let unlocked = Boolean(await userKey());
+  if (!unlocked && auth) unlocked = await unlockWithAuthentik({ force: true });
+  const du = await local.get("deviceUnlock");
+  const info = await local.get("deviceUnlockInfo");
+  const u = await session.get("unlock");
   return {
+    authentik: { registered: Boolean(du), message: info?.message || null, via: u?.via || null },
+    lockReason: unlocked ? null : (await session.get("lockReason")) || null,
+    manualLock: !unlocked && Boolean(await session.get("manualLock")),
     configured: Boolean(auth),
     server: cfg.server || "",
     email: cfg.email || "",
@@ -521,13 +715,15 @@ const handlers = {
   "vx-status": () => status(),
   "vx-login": (m) => login(m),
   "vx-unlock": (m) => unlockWithPassword(m.password),
-  "vx-lock": () => lock().then(() => ({ ok: true })),
+  "vx-lock": () => lock(null, { manual: true }).then(() => ({ ok: true })),
   "vx-logout": () => logout().then(() => ({ ok: true })),
   "vx-sync": () => sync(),
+  "vx-unlock-authentik": () => unlockWithAuthentik({ force: true, explicit: true }).then((ok) => ({ ok })),
+  "vx-check-authentik": () => checkAuthentikUnlock().then(() => ({ ok: true })),
   "vx-tab-items": (m) => tabItems(m.tabId),
   "vx-fill-tab": (m) => fillTab(m.tabId, m.itemId),
 };
-const POPUP_ONLY = new Set(["vx-status", "vx-login", "vx-unlock", "vx-lock", "vx-logout", "vx-sync", "vx-tab-items", "vx-fill-tab"]);
+const POPUP_ONLY = new Set(["vx-unlock-authentik", "vx-check-authentik", "vx-status", "vx-login", "vx-unlock", "vx-lock", "vx-logout", "vx-sync", "vx-tab-items", "vx-fill-tab"]);
 
 ext.runtime.onMessage.addListener((msg, sender, reply) => {
   const handler = handlers[msg?.type];
@@ -544,12 +740,16 @@ ext.runtime.onMessage.addListener((msg, sender, reply) => {
 
 ext.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "lock") await lock();
-  if (alarm.name === "sync" && (await local.get("auth"))) sync().catch(() => undefined);
+  if (alarm.name === "sync" && (await local.get("auth"))) {
+    sync().catch(() => undefined);
+    checkAuthentikUnlock().catch(() => undefined);
+  }
   if (alarm.name === "hub") connectHub();
 });
 
 ext.alarms.create("sync", { periodInMinutes: SYNC_MINUTES });
 ext.runtime.onStartup?.addListener(() => {
+  unlockWithAuthentik({ force: true }).catch(() => undefined);
   sync().catch(() => undefined);
   connectHub();
 });

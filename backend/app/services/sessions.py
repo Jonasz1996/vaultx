@@ -39,6 +39,8 @@ class SessionService:
         oidc_sid: str | None = None,
         id_token: str | None = None,
         auth_method: str = "oidc",
+        mfa: bool = False,
+        idp_auth_time: datetime | None = None,
     ) -> tuple[str, UserSession]:
         """Maakt een sessie aan (zonder commit) en geeft het ruwe cookietoken terug."""
         now = datetime.now(UTC)
@@ -51,6 +53,8 @@ class SessionService:
                 auth_method=auth_method,
                 oidc_sid=oidc_sid,
                 id_token=id_token,
+                mfa=mfa,
+                idp_auth_time=idp_auth_time,
                 ip_address=meta.ip_address,
                 user_agent=ua[:512] if ua else None,
                 created_at=now,

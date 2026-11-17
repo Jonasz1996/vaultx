@@ -55,6 +55,18 @@ De extensie verschijnt in VaultX bij **Mijn kluis → Apps, apparaten en beveili
   **Vergrendelen** klikt, of na 12 uur. Daarna vraagt de extensie je master
   password. Ontgrendelen kan ook als VaultX onbereikbaar is: de versleutelde
   kluis staat lokaal.
+- **Ontgrendelen met Authentik**: ben je via Authentik (met MFA) bij VaultX
+  aangemeld, dan gaat de kluis vanzelf open, zonder master password. Na de
+  eerste keer ontgrendelen met je master password registreert de extensie
+  zich daarvoor; in het popupvenster staat dan "Ontgrendelen met Authentik
+  staat aan op deze browser". Is je VaultX-sessie verlopen, dan meldt de
+  extensie zich stil opnieuw aan via Authentik in een tabblad op de
+  achtergrond, dat meteen weer sluit; het aanmeldscherm van Authentik
+  verschijnt daar nooit. Meld je je af bij Authentik, of wordt het apparaat
+  ingetrokken, dan vergrendelt de extensie. Zelf op **Vergrendelen** klikken
+  houdt de kluis dicht tot je **Ontgrendelen met Authentik** of je master
+  password gebruikt. Zie [Authentik](authentik.md#kluis-openen-met-authentik-vaultx-invuller)
+  voor de regels (MFA, 12 uur, intrekken).
 - **Invullen** op een pagina met een loginformulier:
   - gebruikersnaam en wachtwoord, dan Enter;
   - een login in twee stappen (eerst gebruikersnaam, dan wachtwoord): elke
@@ -97,7 +109,7 @@ Items met **Master password opnieuw vragen** vult de extensie nooit in.
 | Wat ligt plat | Wat er gebeurt |
 |---|---|
 | VaultX | De extensie werkt met de laatst gesynchroniseerde kluis. Ontgrendelen met je master password. |
-| Authentik | Geen invloed op de extensie. |
+| Authentik | Ontgrendelen met Authentik lukt niet; je master password werkt zoals altijd. Een open kluis blijft open. |
 | Een certificaat, een node, NPM | De apps werken zoals altijd; je kan altijd zelf inloggen. De extensie zit niet in het pad van een aanvraag. |
 | De extensie zelf (uitgezet) | Niets verandert aan de apps; je logt in zoals vroeger. |
 
@@ -107,6 +119,8 @@ Items met **Master password opnieuw vragen** vult de extensie nooit in.
 node --test extension/test/*.test.js        # URL-regels, TOTP (RFC 6238), crypto
 cd backend && VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
   python ../e2e/invuller_e2e.py ../invuller-shots   # de extensie in Chromium
+# ontgrendelen met Authentik, tegen een echte Authentik (zie e2e/README.md)
+python ../e2e/device_unlock_e2e.py --authentik http://localhost:9000 --authentik-token <token> ../du-shots
 ```
 
 Argon2id komt van [hash-wasm](https://github.com/Daninet/hash-wasm) (MIT),

@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -71,6 +72,8 @@ class VaultAccount(TimestampMixin, Base):
     account_keys_v2: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # Id van de user key zoals de client hem meldt (POST /api/accounts/key-management/user-key-id).
     user_key_id: Mapped[str | None] = mapped_column(String(64))
+    # Ontgrendelen met Authentik (VaultX Invuller) toegestaan voor deze kluis.
+    device_unlock_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     # Verandert bij elk event dat bestaande tokens ongeldig moet maken.
     security_stamp: Mapped[str] = mapped_column(String(64))
     # Laatste wijziging aan de kluis; clients doen een volledige sync als die nieuwer is.
