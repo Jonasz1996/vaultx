@@ -107,6 +107,19 @@ class PyClient:
                 return c, key
         raise AssertionError(f"item {name} niet gevonden")
 
+    def create_plain_login(self, name: str, uri: str | None) -> str:
+        uk = self.user_key
+
+        def e(text: str) -> str:
+            return encrypt(text.encode(), uk[:32], uk[32:])
+
+        login = {"username": e("admin"), "password": e("router-geheim"), "uris": []}
+        if uri:
+            login["uris"] = [{"uri": e(uri), "match": None}]
+        r = httpx.post(f"{self.api}/api/ciphers", headers=self.headers, json={"type": 1, "name": e(name), "login": login})
+        assert r.status_code == 200, r.text
+        return r.json()["id"]
+
 
 def main() -> None:
     shots = Path(sys.argv[1]) if len(sys.argv) > 1 else None
@@ -309,6 +322,36 @@ def main() -> None:
             step("De webkluis staat in de apparatenlijst")
             page.get_by_role("link", name="Apps, apparaten en beveiliging").click()
             expect(page.get_by_text("VaultX-webkluis (Chrome)")).to_be_visible()
+
+            step("VaultX Invuller: wat ze invulde, mislukte logins en items die ze niet kan invullen")
+            router = client.create_plain_login("Router", "http://192.168.10.1")
+            client.create_plain_login("Zonder adres", None)
+            grafana = client.by_name("Grafana")[0]["id"]
+            events = [
+                {"item_id": grafana, "host": "grafana.example.com", "kind": "fill"},
+                {"item_id": grafana, "host": "grafana.example.com", "kind": "fill"},
+                {"item_id": router, "host": "192.168.10.1", "kind": "fill"},
+                {"item_id": router, "host": "192.168.10.1", "kind": "failed"},
+            ]
+            r = httpx.post(f"{api}/api/vaultx/fill-events", headers=client.headers, json={"events": events})
+            assert r.json() == {"saved": 4}, r.text
+            page.reload()
+            # Na herladen is de webkluis dicht: enkel ids en hosts, geen namen.
+            card = page.locator(".card", has=page.get_by_role("heading", name="VaultX Invuller"))
+            expect(card.get_by_text("grafana.example.com")).to_be_visible(timeout=30_000)
+            expect(card.get_by_text("Open de webkluis")).to_be_visible()
+            expect(card.get_by_text("Grafana", exact=True)).to_have_count(0)
+            page.get_by_role("link", name="Items", exact=True).click()
+            expect(page.get_by_role("heading", name="Kluis ontgrendelen")).to_be_visible(timeout=30_000)
+            page.get_by_label("Master password").fill(PASSWORD)
+            page.get_by_role("button", name="Ontgrendelen").click()
+            expect(page.locator(".wv-items button", has_text="Router")).to_be_visible(timeout=30_000)
+            page.get_by_role("link", name="Apps, apparaten en beveiliging").click()
+            expect(card.get_by_role("cell", name="Grafana", exact=True)).to_be_visible(timeout=30_000)
+            expect(card.get_by_text("Login mislukt na invullen")).to_be_visible()
+            expect(card.locator("p", has_text="zonder adres")).to_contain_text("Zonder adres")
+            expect(card.locator("p", has_text="enkel http")).to_contain_text("Router")
+            shot(page, "06-invuller-inzicht", card)
 
             step("Tweestapsverificatie aan: de webkluis vraagt de code bij ontgrendelen")
             card = page.locator(".card", has=page.get_by_role("heading", name="Tweestapsverificatie"))

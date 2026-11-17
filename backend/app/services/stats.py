@@ -27,6 +27,8 @@ from app.models import (
     VaultAttachment,
     VaultCipher,
     VaultDevice,
+    VaultDeviceUnlock,
+    VaultFillEvent,
     VaultFolder,
     VaultNote,
 )
@@ -167,6 +169,29 @@ class StatsService:
                 "by_type": dict(device_types.most_common()),
                 "last_seen_at": max((seen for _, seen in devices), default=None),
             },
+        }
+
+        # --- VaultX Invuller (ontgrendelen met Authentik, invullingen) ---------------------
+        unlock = (
+            await self.db.execute(
+                select(func.count(), func.count(func.distinct(VaultDeviceUnlock.user_id))).where(
+                    VaultDeviceUnlock.revoked_at.is_(None), mine(VaultDeviceUnlock.user_id)
+                )
+            )
+        ).one()
+        fills = (
+            await self.db.execute(
+                select(
+                    func.count().filter(VaultFillEvent.kind == "fill"),
+                    func.count().filter(VaultFillEvent.kind == "failed"),
+                ).where(VaultFillEvent.occurred_at >= day_ago, mine(VaultFillEvent.user_id))
+            )
+        ).one()
+        result["invuller"] = {
+            "devices_with_authentik_unlock": unlock[0],
+            "users_with_authentik_unlock": unlock[1],
+            "fills_last_24h": fills[0],
+            "failed_logins_last_24h": fills[1],
         }
 
         # --- Notities ---------------------------------------------------------------------

@@ -81,6 +81,10 @@ Eén keer per 30 à 60 seconden verversen is ruim genoeg.
       "last_seen_at": "2026-11-16T21:40:00Z"
     }
   },
+  "invuller": {
+    "devices_with_authentik_unlock": 2, "users_with_authentik_unlock": 1,
+    "fills_last_24h": 17, "failed_logins_last_24h": 0
+  },
   "notes": { "total": 25, "in_trash": 1, "last_change_at": "2026-11-15T09:00:00Z" },
   "links": { "total": 950, "pinned": 10, "last_added_at": "2026-11-16T18:00:00Z", "collections": 22, "tags": 60 },
   "catalog": {
@@ -107,6 +111,7 @@ Eén keer per 30 à 60 seconden verversen is ruim genoeg.
 | `vault.devices` | Bitwarden-apps, extensies en de webkluis die ingelogd zijn (niet ingetrokken); "actief" = gezien in de laatste 30 dagen |
 | `vault.items` | Kluisitems per soort, zonder de prullenbak; `in_trash` apart |
 | `catalog.by_status` | Zoals in de catalogus: `protected` (Authentik), `restricted`, `unprotected`, `offline`, `removed`, `unknown` |
+| `invuller` | VaultX Invuller: browsers die de kluis openen met Authentik (niet ingetrokken), en invullingen en mislukte logins na invullen in de laatste 24 uur |
 | `activity_last_24h` | Uit de auditlog: logins op VaultX en op de kluis, gelukt en mislukt |
 
 Tijdstippen zijn in UTC (ISO 8601). Ook ingelogd in de webinterface werkt `/api/v1/stats`

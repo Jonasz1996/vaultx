@@ -173,12 +173,27 @@ type Filter =
   | { kind: "type"; type: CipherType }
   | { kind: "folder"; id: string | null };
 
-interface Decrypted {
+export interface Decrypted {
   items: ItemView[];
   folders: FolderView[];
 }
 
-const SYNC_KEY = ["webvault", "sync"];
+export const SYNC_KEY = ["webvault", "sync"];
+
+/** De kluis ophalen en ontsleutelen in deze browser (webkluis, ook voor het inzicht op Mijn kluis). */
+export async function loadWebVault(
+  request: <T>(method: string, path: string) => Promise<T>,
+  userKey: UserKey,
+): Promise<Decrypted> {
+  const data = await request<SyncResponse>("GET", "/api/sync?excludeDomains=true");
+  const [folders, items] = await Promise.all([
+    Promise.all(data.folders.map((f) => decryptFolder(f, userKey))),
+    Promise.all(data.ciphers.map((c) => decryptCipher(c, userKey))),
+  ]);
+  folders.sort((a, b) => a.name.localeCompare(b.name, "nl"));
+  items.sort((a, b) => a.name.localeCompare(b.name, "nl", { sensitivity: "base" }));
+  return { folders, items };
+}
 
 function sameFilter(a: Filter, b: Filter): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -189,16 +204,7 @@ function VaultBrowser({ userKey }: { userKey: UserKey }) {
   const qc = useQueryClient();
   const sync = useQuery({
     queryKey: SYNC_KEY,
-    queryFn: async (): Promise<Decrypted> => {
-      const data = await request<SyncResponse>("GET", "/api/sync?excludeDomains=true");
-      const [folders, items] = await Promise.all([
-        Promise.all(data.folders.map((f) => decryptFolder(f, userKey))),
-        Promise.all(data.ciphers.map((c) => decryptCipher(c, userKey))),
-      ]);
-      folders.sort((a, b) => a.name.localeCompare(b.name, "nl"));
-      items.sort((a, b) => a.name.localeCompare(b.name, "nl", { sensitivity: "base" }));
-      return { folders, items };
-    },
+    queryFn: () => loadWebVault(request, userKey),
     staleTime: 30_000,
     refetchOnWindowFocus: true,
   });

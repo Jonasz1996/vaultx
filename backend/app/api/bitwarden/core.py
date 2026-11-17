@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import base64
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
+from pydantic import BaseModel, Field, field_validator
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.api.bitwarden.deps import BitwardenRoute, Caller, vault_enabled
@@ -36,6 +38,7 @@ from app.services.attachments import (
     AttachmentService,
     attachment_json,
 )
+from app.services.fill_events import FillEventService, valid_host
 from app.services.vault import VaultService
 
 # Bitwarden-serverversie die VaultX meldt. De clients zetten functies aan of uit op basis
@@ -387,3 +390,30 @@ async def update_folder(folder_id: UUID, body: FolderIn, c: Caller, db: DbSessio
 @router.post("/folders/{folder_id}/delete", status_code=200)
 async def delete_folder(folder_id: UUID, c: Caller, db: DbSession) -> None:
     await VaultService(db).delete_folder(c, folder_id)
+
+
+# --- VaultX Invuller: wat de extensie invulde (geen Bitwarden-route) --------------------------
+
+
+class FillEventIn(BaseModel):
+    item_id: UUID
+    host: str = Field(min_length=1, max_length=261)
+    kind: Literal["fill", "failed"]
+    at: datetime | None = None
+
+    @field_validator("host")
+    @classmethod
+    def _host(cls, v: str) -> str:
+        if not valid_host(v):
+            raise ValueError("ongeldige host")
+        return v
+
+
+class FillEventsIn(BaseModel):
+    events: list[FillEventIn] = Field(max_length=200)
+
+
+@router.post("/vaultx/fill-events", summary="VaultX Invuller: ingevulde items (id en host, nooit inhoud)")
+async def fill_events(body: FillEventsIn, c: Caller, db: DbSession) -> dict[str, int]:
+    saved = await FillEventService(db).record(c, [e.model_dump() for e in body.events])
+    return {"saved": saved}

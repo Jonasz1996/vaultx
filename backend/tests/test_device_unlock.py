@@ -54,6 +54,8 @@ async def test_register_open_and_list(make_client):
     devices = (await c.get(BASE)).json()["devices"]
     assert [d["name"] for d in devices] == ["VaultX Invuller (Chrome)"] and devices[0]["last_used_at"]
     assert (await c.get(f"{BASE}/{uid}")).json()["active"] is True
+    inv = (await c.get("/api/v1/stats")).json()["invuller"]
+    assert inv["devices_with_authentik_unlock"] == 1 and inv["users_with_authentik_unlock"] == 1
     async with get_sessionmaker()() as db:
         actions = list(
             await db.scalars(select(AuditLog.action).where(AuditLog.action.like("vault.device_unlock%")))

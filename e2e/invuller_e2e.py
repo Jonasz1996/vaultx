@@ -459,6 +459,19 @@ def main() -> None:
             shot(p, "07-fout-wachtwoord")
             p.close()
 
+            step("Inzicht: de extensie meldde wat ze invulde (id en host), Mijn kluis toont het")
+            worker.evaluate("flushFills()")
+            web = httpx.Client(base_url=api, trust_env=False, timeout=60, headers={"X-VaultX-CSRF": "1"})
+            login(web, fake, "jonas", EMAIL, ["vaultx-admins"])
+            d = web.get("/api/v1/vault/fill-insights").json()
+            hosts = {i["host"].split(".")[0] for i in d["items"]}
+            assert {"plain", "twostep", "mfa", "spa", "multi", "noenter", "wrong"} <= hosts, d
+            assert not hosts & {"evil", "p1ain", "secure", "reprompt"}, d
+            assert d["failures"] == 1 and d["items"][0]["host"].startswith("wrong.") and d["items"][0]["failures"] == 1, d
+            inv = web.get("/api/v1/stats").json()["invuller"]
+            assert inv["fills_last_24h"] == d["fills"] and inv["failed_logins_last_24h"] == 1, inv
+            assert "Plain" not in str(d) and GOOD["plain"] not in str(d)
+
             assert not errors, errors
             ctx.close()
         step("OK: VaultX Invuller vult in en verstuurt waar het mag, en nergens anders")
