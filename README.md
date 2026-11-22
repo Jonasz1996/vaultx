@@ -19,6 +19,12 @@ in Linkwarden).
 - Je Advanced-config (CSS-thema, security headers, Authentik) blijft heel: VaultX-blokken zijn onaantastbaar, beschermde regels weghalen vraagt een bevestiging
 - Getest tegen een echte NPM 2.16.0 (ook in CI). Zie [docs/npm-beheer.md](docs/npm-beheer.md)
 
+**VaultX Invuller (browserextensie, `extension/`)**
+
+- Eigen extensie voor Chrome, Edge en Firefox: vult gebruikersnaam, wachtwoord en de TOTP-code in en drukt op Enter, ook bij logins in twee stappen en apps zonder formulier. Meerdere passende logins: een keuzemenu. Per item uit te zetten met `vx:enter = nee` of `vx:invullen = nee`
+- Strikt: enkel op exact dezelfde host en poort, geen https-item op http, nooit in een vreemd iframe, één poging per 30 seconden en een melding bij een fout wachtwoord. Niets in NPM of de apps
+- Getest in Chromium met de echte extensie tegen de backend (ook in CI). Zie [docs/invuller.md](docs/invuller.md)
+
 **Lees-API voor dashboards**
 
 - `GET /api/v1/stats` met een persoonlijke API-sleutel: aantal kluisitems per soort, ingelogde toestellen, sessies, gebruikers, apps uit NPM, links en logins van de laatste 24 uur. Enkel tellingen, nooit inhoud; de sleutel kan niets wijzigen en werkt nergens anders
