@@ -60,8 +60,18 @@ def vaultx_provider(ak: Authentik, redirect_uri: str) -> tuple[str, str, str]:
             ("invalidation", "default-provider-invalidation-flow"),
         )
     }
-    managed = {m.get("managed"): m["pk"] for m in ak.get("/propertymappings/provider/scope/")}
-    mappings = [managed[f"goauthentik.io/providers/oauth2/scope-{s}"] for s in SCOPES]
+    # De scope-mappings komen uit een eigen blueprint; die kan nog lopen als de flows er al zijn.
+    wanted = [f"goauthentik.io/providers/oauth2/scope-{s}" for s in SCOPES]
+    deadline = time.monotonic() + 300
+    while True:
+        managed = {m.get("managed"): m["pk"] for m in ak.get("/propertymappings/provider/scope/")}
+        if all(w in managed for w in wanted):
+            break
+        if time.monotonic() > deadline:
+            missing = sorted(set(wanted) - set(managed))
+            raise SystemExit(f"Authentik: scope-mappings ontbreken na 5 minuten: {missing}")
+        time.sleep(3)
+    mappings = [managed[w] for w in wanted]
     key = next(
         k for k in ak.get("/crypto/certificatekeypairs/") if k["name"] == "authentik Self-signed Certificate"
     )
