@@ -94,6 +94,9 @@ export function NpmConnectionDetailPage() {
         actions={
           manage && (
             <>
+              <Link className="btn" to={`/npm/${orgId}/${connId}/beheer`}>
+                NPM beheren
+              </Link>
               {c.write_enabled && (
                 <button className="btn btn-primary" onClick={() => setPublishing(true)}>
                   App publiceren

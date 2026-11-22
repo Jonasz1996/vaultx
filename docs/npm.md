@@ -3,6 +3,8 @@
 VaultX leest de proxy hosts uit Nginx Proxy Manager (NPM) en vult daarmee de
 **applicatiecatalogus**: welke applicaties er draaien, op welk domein, en hoe
 je er binnenkomt (via Authentik of niet). Standaard **leest** VaultX enkel.
+Alles in NPM zelf beheren (hosts, certificaten, access lists, streams): zie
+[npm-beheer.md](npm-beheer.md).
 Zet je schrijven aan op de koppeling, dan kan een beheerder per host
 **Authentik-bescherming laten zetten of weghalen** (sectie 5): VaultX toont eerst
 wat het wijzigt, controleert de host achteraf en zet bij een fout de vorige

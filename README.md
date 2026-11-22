@@ -12,6 +12,13 @@ gewoon account, naast Authentik), **fase 9** (wat de Bitwarden-apps nog
 misten tegenover Bitwarden en Vaultwarden) en **fase 10** (links bewaren zoals
 in Linkwarden).
 
+**NPM volledig beheren**
+
+- Scherm "NPM beheren" per koppeling: proxy hosts, redirects, 404-hosts, streams, access lists en certificaten (Let's Encrypt aanvragen of eigen certificaat opladen) aanmaken, bewerken, aan/uit zetten en verwijderen
+- Elke wijziging eerst als voorbeeld met controles; daarna controleert VaultX nginx en de host zelf en zet terug bij een fout. Journaal met "opnieuw aanmaken"
+- Je Advanced-config (CSS-thema, security headers, Authentik) blijft heel: VaultX-blokken zijn onaantastbaar, beschermde regels weghalen vraagt een bevestiging
+- Getest tegen een echte NPM 2.16.0 (ook in CI). Zie [docs/npm-beheer.md](docs/npm-beheer.md)
+
 **Lees-API voor dashboards**
 
 - `GET /api/v1/stats` met een persoonlijke API-sleutel: aantal kluisitems per soort, ingelogde toestellen, sessies, gebruikers, apps uit NPM, links en logins van de laatste 24 uur. Enkel tellingen, nooit inhoud; de sleutel kan niets wijzigen en werkt nergens anders

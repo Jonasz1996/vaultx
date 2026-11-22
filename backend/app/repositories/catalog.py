@@ -126,18 +126,30 @@ class NpmChangeRepository(Repository[NpmChange]):
     model = NpmChange
 
     async def for_connection(
-        self, connection_id: UUID, *, npm_id: int | None = None, limit: int = 50
+        self,
+        connection_id: UUID,
+        *,
+        npm_id: int | None = None,
+        object_type: str | None = None,
+        limit: int = 50,
     ) -> list[NpmChange]:
         stmt = select(NpmChange).where(NpmChange.connection_id == connection_id)
         if npm_id is not None:
-            stmt = stmt.where(NpmChange.npm_id == npm_id)
+            # Een id is enkel uniek binnen één soort object; zonder soort gaat het om proxy hosts.
+            kind = object_type or "proxy_host"
+            stmt = stmt.where(NpmChange.npm_id == npm_id, NpmChange.object_type == kind)
+        elif object_type is not None:
+            stmt = stmt.where(NpmChange.object_type == object_type)
         return list(await self.db.scalars(stmt.order_by(NpmChange.created_at.desc()).limit(limit)))
 
-    async def stale_running(self, connection_id: UUID, npm_id: int, before: datetime) -> list[NpmChange]:
+    async def stale_running(
+        self, connection_id: UUID, npm_id: int, before: datetime, object_type: str = "proxy_host"
+    ) -> list[NpmChange]:
         rows = await self.db.scalars(
             select(NpmChange).where(
                 NpmChange.connection_id == connection_id,
                 NpmChange.npm_id == npm_id,
+                NpmChange.object_type == object_type,
                 NpmChange.status == "running",
                 NpmChange.created_at < before,
             )

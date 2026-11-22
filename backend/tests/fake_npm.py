@@ -117,6 +117,17 @@ class FakeNPM:
         self.fail_deletes = 0
         self.deleted: list[int] = []
         self.unreachable_upstreams: set[str] = set()
+        # NPM-beheer: de andere soorten objecten, zoals NPM ze teruggeeft.
+        self.objects: dict[str, list[dict[str, Any]]] = {
+            "redirection-hosts": [],
+            "dead-hosts": [],
+            "streams": [],
+            "access-lists": [],
+        }
+        self.uploads: list[int] = []
+        self.renewed: list[int] = []
+        self.fail_upload = False
+        self.letsencrypt_error: str | None = None
         self.transport = httpx.MockTransport(self._handle)
 
     def host(self, npm_id: int) -> dict[str, Any] | None:
@@ -133,6 +144,8 @@ class FakeNPM:
                     return f'nginx: [emerg] host not found in upstream "{name}"'
             if cfg.count("{") != cfg.count("}"):
                 return "nginx: [emerg] unexpected end of file"
+            if "bad_directive" in cfg:
+                return 'nginx: [emerg] unknown directive "bad_directive"'
             if len(re.findall(r"^\s*auth_request\s", cfg, re.M)) > 1:
                 return 'nginx: [emerg] "auth_request" directive is duplicate'
         return None
@@ -204,7 +217,26 @@ class FakeNPM:
         url = t.url
         if self.probe_down:
             return ProbeResult(url=url, error="ConnectError")
+        redirect = next(
+            (
+                h
+                for h in self.objects["redirection-hosts"]
+                if t.domain in h["domain_names"]
+                and h.get("enabled", True)
+                and (h.get("meta") or {}).get("nginx_online") is not False
+            ),
+            None,
+        )
+        if redirect is not None:
+            scheme = "https" if redirect.get("forward_scheme") == "https" else "http"
+            return ProbeResult(
+                url=url,
+                status=int(redirect.get("forward_http_code") or 301),
+                location=f"{scheme}://{redirect['forward_domain_name']}/",
+            )
         host = next((h for h in self.hosts if t.domain in h["domain_names"]), None)
+        if host is not None and host.get("forward_host") in self.unreachable_upstreams:
+            return ProbeResult(url=url, status=502)
         if (
             host is None
             or not host.get("enabled", True)
@@ -227,6 +259,167 @@ class FakeNPM:
         return ProbeResult(
             url=url, status=302, location=f"/outpost.goauthentik.io/start?rd=https://{t.domain}/"
         )
+
+    # ------------------------------------------------------------ NPM-beheer (andere objecten)
+
+    def _stamp(self, obj: dict[str, Any]) -> None:
+        self._modified += 1
+        obj["modified_on"] = f"2026-10-05 12:{self._modified // 60:02d}:{self._modified % 60:02d}"
+
+    def _test_object(self, kind: str, obj: dict[str, Any]) -> str | None:
+        if kind == "streams":
+            for other in self.objects["streams"]:
+                if (
+                    other is not obj
+                    and other.get("incoming_port") == obj.get("incoming_port")
+                    and other.get("enabled", True)
+                ):
+                    return f"nginx: [emerg] duplicate listen options for 0.0.0.0:{obj.get('incoming_port')}"
+            return None
+        if kind == "access-lists":
+            return None
+        cfg = obj.get("advanced_config") or ""
+        if cfg.count("{") != cfg.count("}"):
+            return "nginx: [emerg] unexpected end of file"
+        if "bad_directive" in cfg:
+            return 'nginx: [emerg] unknown directive "bad_directive"'
+        return None
+
+    def _generic(self, request: httpx.Request, kind: str, rest: str) -> httpx.Response:
+        items = self.hosts if kind == "proxy-hosts" else self.objects[kind]
+        method = request.method
+        not_found = httpx.Response(404, json={"error": {"code": 404, "message": "Not Found"}})
+        if rest == "" and method == "GET":
+            return httpx.Response(200, json=items)
+        if rest == "" and method == "POST":
+            body = json.loads(request.content)
+            if kind != "access-lists" and kind != "streams":
+                for d in body.get("domain_names") or []:
+                    for k in ("proxy-hosts", "redirection-hosts", "dead-hosts"):
+                        pool = self.hosts if k == "proxy-hosts" else self.objects[k]
+                        if any(d in h.get("domain_names", []) for h in pool):
+                            return httpx.Response(
+                                400, json={"error": {"code": 400, "message": f"{d} is already in use"}}
+                            )
+            self.next_id += 1
+            obj = {"id": self.next_id, "created_on": "2026-10-05 12:00:00", "enabled": True, **body}
+            if kind == "access-lists":
+                obj["items"] = [{"username": i["username"], "password": ""} for i in body.get("items") or []]
+                obj["passwords"] = {i["username"]: i.get("password", "") for i in body.get("items") or []}
+            self._stamp(obj)
+            items.append(obj)
+            err = self._test_object(kind, obj)
+            response = {**obj, "meta": {}}
+            obj["meta"] = {"nginx_online": err is None, "nginx_err": err}
+            return httpx.Response(201, json=response)
+        m = re.fullmatch(r"/(\d+)(/enable|/disable)?", rest)
+        if not m:
+            return not_found
+        obj = next((o for o in items if o["id"] == int(m.group(1))), None)
+        if obj is None:
+            return not_found
+        if m.group(2):
+            if method != "POST":
+                return not_found
+            enable = m.group(2) == "/enable"
+            if bool(obj.get("enabled", True)) == enable:
+                word = "enabled" if enable else "disabled"
+                return httpx.Response(
+                    400, json={"error": {"code": 400, "message": f"Host is already {word}"}}
+                )
+            obj["enabled"] = enable
+            self._stamp(obj)
+            err = self._test_object(kind, obj) if enable else None
+            obj["meta"] = {"nginx_online": err is None, "nginx_err": err}
+            return httpx.Response(200, json=True)
+        if method == "GET":
+            return httpx.Response(200, json=obj)
+        if method == "PUT":
+            body = json.loads(request.content)
+            if kind == "access-lists" and "items" in body:
+                old = obj.get("passwords", {})
+                obj["passwords"] = {
+                    i["username"]: i.get("password") or old.get(i["username"], "") for i in body["items"]
+                }
+                body["items"] = [{"username": i["username"], "password": ""} for i in body["items"]]
+            obj.update(body)
+            self._stamp(obj)
+            err = self._test_object(kind, obj)
+            obj["meta"] = {"nginx_online": err is None, "nginx_err": err}
+            return httpx.Response(200, json=obj)
+        if method == "DELETE":
+            items.remove(obj)
+            self.deleted.append(obj["id"])
+            if kind == "access-lists":  # zoals NPM: hosts met deze lijst staan daarna open
+                for h in self.hosts:
+                    if h.get("access_list_id") == obj["id"]:
+                        h["access_list_id"] = 0
+            return httpx.Response(200, json=True)
+        return not_found
+
+    def _certificates(self, request: httpx.Request, rest: str) -> httpx.Response:
+        method = request.method
+        if rest == "/dns-providers" and method == "GET":
+            return httpx.Response(
+                200, json=[{"id": "cloudflare", "name": "Cloudflare", "credentials": "x = y"}]
+            )
+        if rest == "/validate" and method == "POST":
+            body = request.content.decode(errors="replace")
+            if "BEGIN CERTIFICATE" not in body:
+                return httpx.Response(
+                    400, json={"error": {"code": 400, "message": "Certificate is not valid"}}
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "certificate": {
+                        "cn": "eigen.domain.be",
+                        "issuer": "CN=test",
+                        "dates": {"from": 1, "to": 4102444800},
+                    },
+                    "certificate_key": "WRONG KEY" not in body,
+                },
+            )
+        if rest == "" and method == "POST":
+            body = json.loads(request.content)
+            if body.get("provider") == "letsencrypt" and self.letsencrypt_error:
+                return httpx.Response(500, json={"error": {"code": 500, "message": self.letsencrypt_error}})
+            self.next_id += 1
+            cert = {
+                "id": self.next_id,
+                "provider": body["provider"],
+                "nice_name": body.get("nice_name") or ", ".join(body.get("domain_names") or []),
+                "domain_names": body.get("domain_names") or [],
+                "expires_on": "2027-01-01 00:00:00",
+                "meta": {"certificate_key": "-----BEGIN PRIVATE KEY-----geheim"},
+            }
+            self._stamp(cert)
+            self.certificates.append(cert)
+            return httpx.Response(201, json=cert)
+        m = re.fullmatch(r"/(\d+)(/upload|/renew)?", rest)
+        cert = next((c for c in self.certificates if m and c["id"] == int(m.group(1))), None)
+        if cert is None:
+            return httpx.Response(404, json={"error": {"code": 404, "message": "Not Found"}})
+        assert m is not None
+        if m.group(2) == "/upload" and method == "POST":
+            if self.fail_upload:
+                return httpx.Response(
+                    400, json={"error": {"code": 400, "message": "Certificate is not valid"}}
+                )
+            self.uploads.append(cert["id"])
+            cert["domain_names"] = ["eigen.domain.be"]
+            return httpx.Response(200, json={"certificate": "x"})
+        if m.group(2) == "/renew" and method == "POST":
+            self.renewed.append(cert["id"])
+            cert["expires_on"] = "2027-03-01 00:00:00"
+            return httpx.Response(200, json=cert)
+        if method == "GET":
+            return httpx.Response(200, json=cert)
+        if method == "DELETE":
+            self.certificates.remove(cert)
+            self.deleted.append(cert["id"])
+            return httpx.Response(200, json=True)
+        return httpx.Response(404, json={"error": {"code": 404, "message": "Not Found"}})
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -252,6 +445,15 @@ class FakeNPM:
             return self._create(json.loads(request.content))
         if path == "/api/nginx/certificates" and request.method == "GET":
             return httpx.Response(200, json=self.certificates)
+        m = re.fullmatch(r"/api/nginx/certificates(/.*)?", path)
+        if m:
+            return self._certificates(request, m.group(1) or "")
+        m = re.fullmatch(r"/api/nginx/(redirection-hosts|dead-hosts|streams|access-lists)(/.*)?", path)
+        if m:
+            return self._generic(request, m.group(1), m.group(2) or "")
+        m = re.fullmatch(r"/api/nginx/proxy-hosts/(\d+)/(enable|disable)", path)
+        if m:
+            return self._generic(request, "proxy-hosts", f"/{m.group(1)}/{m.group(2)}")
         m = re.fullmatch(r"/api/nginx/proxy-hosts/(\d+)", path)
         if m and request.method == "GET":
             host = self.host(int(m.group(1)))

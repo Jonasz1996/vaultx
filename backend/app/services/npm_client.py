@@ -169,3 +169,98 @@ class NPMClient:
         except NPMError as exc:
             if exc.status != 404:
                 raise
+
+    # ------------------------------------------------------------ NPM-beheer (alle objecttypes)
+
+    async def list_objects(self, path: str, *, expand: str | None = None) -> list[dict[str, Any]]:
+        """GET /nginx/<path>, bv. 'redirection-hosts'. Enkel objecten met een geheel getal als id."""
+        params = {"expand": expand} if expand else None
+        data = await self._request("GET", f"/nginx/{path}", params=params)
+        if not isinstance(data, list):
+            raise NPMError(f"Onverwacht antwoord van NPM op /nginx/{path}")
+        return [o for o in data if isinstance(o, dict) and isinstance(o.get("id"), int)]
+
+    async def get_object(self, path: str, npm_id: int, *, expand: str | None = None) -> dict[str, Any]:
+        params = {"expand": expand} if expand else None
+        data = await self._request("GET", f"/nginx/{path}/{int(npm_id)}", params=params)
+        if not isinstance(data, dict) or data.get("id") != npm_id:
+            raise NPMError(f"Onverwacht antwoord van NPM op /nginx/{path}/{npm_id}")
+        return data
+
+    async def create_object(
+        self, path: str, body: dict[str, Any], *, wait: float | None = None
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {"json": body}
+        if wait is not None:
+            kwargs["timeout"] = wait
+        data = await self._request("POST", f"/nginx/{path}", **kwargs)
+        if not isinstance(data, dict) or not isinstance(data.get("id"), int):
+            raise NPMError(f"Onverwacht antwoord van NPM bij het aanmaken op /nginx/{path}")
+        return data
+
+    async def update_object(self, path: str, npm_id: int, changes: dict[str, Any]) -> dict[str, Any]:
+        data = await self._request("PUT", f"/nginx/{path}/{int(npm_id)}", json=changes)
+        if not isinstance(data, dict) or data.get("id") != npm_id:
+            raise NPMError(f"Onverwacht antwoord van NPM bij het bijwerken van /nginx/{path}/{npm_id}")
+        return data
+
+    async def delete_object(self, path: str, npm_id: int) -> None:
+        """Verwijderen; wat al weg is (404) telt als gelukt."""
+        try:
+            await self._request("DELETE", f"/nginx/{path}/{int(npm_id)}")
+        except NPMError as exc:
+            if exc.status != 404:
+                raise
+
+    async def set_enabled(self, path: str, npm_id: int, enabled: bool) -> None:
+        """POST /enable of /disable. 'Staat al aan/uit' (400) telt als gelukt."""
+        verb = "enable" if enabled else "disable"
+        try:
+            await self._request("POST", f"/nginx/{path}/{int(npm_id)}/{verb}")
+        except NPMError as exc:
+            if exc.status != 400 or "already" not in exc.message:
+                raise
+
+    async def certificate_raw(self, npm_id: int) -> dict[str, Any]:
+        """Eén certificaat zonder `meta` (daarin zitten de PEM-bestanden en de private key)."""
+        data = await self.get_object("certificates", npm_id)
+        return {k: v for k, v in data.items() if k != "meta"}
+
+    async def upload_certificate(
+        self, npm_id: int, certificate: str, key: str, intermediate: str | None = None
+    ) -> None:
+        files = {
+            "certificate": ("cert.pem", certificate.encode(), "application/x-pem-file"),
+            "certificate_key": ("key.pem", key.encode(), "application/x-pem-file"),
+        }
+        if intermediate:
+            files["intermediate_certificate"] = ("chain.pem", intermediate.encode(), "application/x-pem-file")
+        await self._request("POST", f"/nginx/certificates/{int(npm_id)}/upload", files=files)
+
+    async def validate_certificate(self, certificate: str, key: str) -> dict[str, Any]:
+        """NPM leest het certificaat (cn, issuer, geldigheid) zonder iets op te slaan."""
+        files = {
+            "certificate": ("cert.pem", certificate.encode(), "application/x-pem-file"),
+            "certificate_key": ("key.pem", key.encode(), "application/x-pem-file"),
+        }
+        data = await self._request("POST", "/nginx/certificates/validate", files=files)
+        if not isinstance(data, dict):
+            raise NPMError("Onverwacht antwoord van NPM bij het nakijken van het certificaat")
+        return data
+
+    async def renew_certificate(self, npm_id: int, *, wait: float | None = None) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        if wait is not None:
+            kwargs["timeout"] = wait
+        data = await self._request("POST", f"/nginx/certificates/{int(npm_id)}/renew", **kwargs)
+        return {k: v for k, v in data.items() if k != "meta"} if isinstance(data, dict) else {}
+
+    async def dns_providers(self) -> list[dict[str, Any]]:
+        data = await self._request("GET", "/nginx/certificates/dns-providers")
+        if not isinstance(data, list):
+            return []
+        return [
+            {"id": p.get("id"), "name": p.get("name"), "credentials": p.get("credentials")}
+            for p in data
+            if isinstance(p, dict) and isinstance(p.get("id"), str)
+        ]

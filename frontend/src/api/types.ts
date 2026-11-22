@@ -327,14 +327,16 @@ export interface NpmChange {
   host_id: string | null;
   npm_id: number;
   domain: string;
-  action: ProtectionAction | "publish" | "unpublish";
+  object_type?: string;
+  action: ProtectionAction | "publish" | "unpublish" | "create" | "update" | "delete" | "enable" | "disable" | "renew" | "upload";
   status: NpmChangeStatus;
   verified: boolean;
   actor_label: string | null;
   message: string | null;
   nginx_error: string | null;
   before: Partial<HostConfig>;
-  after: Partial<HostConfig> | null;
+  // Bij NPM beheren: { object, changes, steps } in plaats van de config zelf.
+  after: (Partial<HostConfig> & { object?: Partial<HostConfig> }) | null;
   probe_before: ProbeResult | null;
   probe_after: ProbeResult | null;
   authentik: AuthentikChange | null;

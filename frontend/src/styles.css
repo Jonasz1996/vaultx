@@ -615,3 +615,14 @@ details.callout summary { color: inherit; }
 /* Tweestapsverificatie: sleutels en app als aparte blokken in één kaart */
 .twofactor-section { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
 .twofactor-section h3 { font-size: 0.95rem; margin: 0 0 6px; display: flex; gap: 8px; align-items: center; }
+
+/* NPM beheren */
+.manage-tabs { margin-bottom: 14px; flex-wrap: wrap; }
+.fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.fieldset legend { font-weight: 600; padding: 0 4px; }
+.location-edit { display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; border-bottom: 1px dashed var(--border); }
+.grid-location { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 3fr) minmax(0, 1fr) auto; gap: 6px; }
+.grid-location input, .grid-location select { min-width: 0; width: 100%; box-sizing: border-box; }
+.changes-table td { vertical-align: top; }
+.cell-pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; max-height: 260px; overflow: auto; }
+textarea.mono { width: 100%; box-sizing: border-box; }
