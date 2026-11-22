@@ -204,7 +204,16 @@ class NpmChange(Base):
 
     __tablename__ = "npm_changes"
     __table_args__ = (
-        CheckConstraint("action IN ('protect','unprotect','publish','unpublish')", name="action_valid"),
+        CheckConstraint(
+            "action IN ('protect','unprotect','publish','unpublish','create','update','delete','enable',"
+            "'disable','renew','upload')",
+            name="action_valid",
+        ),
+        CheckConstraint(
+            "object_type IN ('proxy_host','redirection_host','dead_host','stream','access_list',"
+            "'certificate')",
+            name="object_type_valid",
+        ),
         CheckConstraint(
             "status IN ('running','applied','rolled_back','rollback_failed','refused','interrupted')",
             name="status_valid",
@@ -212,6 +221,7 @@ class NpmChange(Base):
         Index(
             "uq_npm_changes_running_host",
             "connection_id",
+            "object_type",
             "npm_id",
             unique=True,
             postgresql_where=text("status = 'running'"),
@@ -228,6 +238,9 @@ class NpmChange(Base):
     host_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("npm_hosts.id", ondelete="SET NULL"), index=True
     )
+    # NPM-beheer: welk soort object (proxy_host, redirection_host, dead_host, stream, access_list,
+    # certificate). npm_id is het id binnen dat soort; `domain` is dan het label van het object.
+    object_type: Mapped[str] = mapped_column(String(24), default="proxy_host", server_default="proxy_host")
     npm_id: Mapped[int] = mapped_column(Integer)
     domain: Mapped[str] = mapped_column(String(255))
     action: Mapped[str] = mapped_column(String(16))

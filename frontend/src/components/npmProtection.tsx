@@ -350,7 +350,9 @@ export function ChangeJournal({ base }: { base: string }) {
         {open && (
           <div className="form">
             <ChangeResult change={open} />
-            {open.status !== "rollback_failed" && <ConfigDiff before={open.before} after={open.after} />}
+            {open.status !== "rollback_failed" && (
+              <ConfigDiff before={open.before} after={open.after?.object ?? open.after} />
+            )}
             <div className="muted small">
               {formatDate(open.created_at)} door {open.actor_label ?? "?"}
               {open.finished_at && `, klaar ${formatDate(open.finished_at)}`}

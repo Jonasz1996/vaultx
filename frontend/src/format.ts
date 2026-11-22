@@ -66,4 +66,11 @@ export const actionLabels: Record<string, string> = {
   unprotect: "Bescherming weghalen",
   publish: "Publiceren",
   unpublish: "Depubliceren",
+  create: "Aanmaken",
+  update: "Bewerken",
+  delete: "Verwijderen",
+  enable: "Aanzetten",
+  disable: "Uitzetten",
+  renew: "Certificaat vernieuwen",
+  upload: "Certificaat opladen",
 };

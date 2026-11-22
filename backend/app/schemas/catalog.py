@@ -290,9 +290,22 @@ class NpmChangeOut(ORMModel):
     id: UUID
     connection_id: UUID
     host_id: UUID | None
+    object_type: str = "proxy_host"
     npm_id: int
     domain: str
-    action: Literal["protect", "unprotect", "publish", "unpublish"]
+    action: Literal[
+        "protect",
+        "unprotect",
+        "publish",
+        "unpublish",
+        "create",
+        "update",
+        "delete",
+        "enable",
+        "disable",
+        "renew",
+        "upload",
+    ]
     status: Literal["running", "applied", "rolled_back", "rollback_failed", "refused", "interrupted"]
     verified: bool
     actor_label: str | None

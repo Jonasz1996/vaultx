@@ -12,6 +12,13 @@ gewoon account, naast Authentik), **fase 9** (wat de Bitwarden-apps nog
 misten tegenover Bitwarden en Vaultwarden) en **fase 10** (links bewaren zoals
 in Linkwarden).
 
+**NPM volledig beheren**
+
+- Scherm "NPM beheren" per koppeling: proxy hosts, redirects, 404-hosts, streams, access lists en certificaten (Let's Encrypt aanvragen of eigen certificaat opladen) aanmaken, bewerken, aan/uit zetten en verwijderen
+- Elke wijziging eerst als voorbeeld met controles; daarna controleert VaultX nginx en de host zelf en zet terug bij een fout. Journaal met "opnieuw aanmaken"
+- Je Advanced-config (CSS-thema, security headers, Authentik) blijft heel: VaultX-blokken zijn onaantastbaar, beschermde regels weghalen vraagt een bevestiging
+- Getest tegen een echte NPM 2.16.0 (ook in CI). Zie [docs/npm-beheer.md](docs/npm-beheer.md)
+
 **VaultX Invuller (browserextensie, `extension/`)**
 
 - Eigen extensie voor Chrome, Edge en Firefox: vult gebruikersnaam, wachtwoord en de TOTP-code in en drukt op Enter, ook bij logins in twee stappen en apps zonder formulier. Meerdere passende logins: een keuzemenu. Per item uit te zetten met `vx:enter = nee` of `vx:invullen = nee`

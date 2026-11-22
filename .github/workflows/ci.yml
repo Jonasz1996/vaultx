@@ -88,6 +88,13 @@ jobs:
         run: |
           python ../e2e/npm_write_e2e.py http://localhost:81 ci@example.com ci-npm-password-123 \
             --proxy 127.0.0.1 --http-port 8080 --https-port 8443
+      - name: NPM volledig beheren (hosts, certificaten, access lists, redirects, 404-hosts, streams)
+        working-directory: backend
+        env:
+          VAULTX_DATABASE_URL: postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e
+        run: |
+          python ../e2e/npm_manage_e2e.py http://localhost:81 ci@example.com ci-npm-password-123 \
+            --proxy 127.0.0.1 --http-port 8080 --https-port 8443
       - name: NPM-log bij een fout
         if: failure()
         run: docker logs npm 2>&1 | tail -100

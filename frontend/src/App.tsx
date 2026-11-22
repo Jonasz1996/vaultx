@@ -11,6 +11,7 @@ import { DashboardPage } from "./pages/Dashboard";
 import { LoginPage } from "./pages/Login";
 import { NpmConnectionDetailPage } from "./pages/NpmConnectionDetail";
 import { NpmConnectionsPage } from "./pages/NpmConnections";
+import { NpmManagePage } from "./pages/NpmManage";
 import { OrganizationDetailPage } from "./pages/OrganizationDetail";
 import { OrganizationsPage } from "./pages/Organizations";
 import { TeamDetailPage } from "./pages/TeamDetail";
@@ -81,6 +82,7 @@ export const router = createBrowserRouter([
           { path: "catalog/:orgId/:appId", element: <ApplicationDetailPage /> },
           { path: "npm", element: <NpmConnectionsPage /> },
           { path: "npm/:orgId/:connId", element: <NpmConnectionDetailPage /> },
+          { path: "npm/:orgId/:connId/beheer", element: <NpmManagePage /> },
           { path: "audit", element: <AuditPageView /> },
         ],
       },
