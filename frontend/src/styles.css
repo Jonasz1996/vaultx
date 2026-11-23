@@ -626,3 +626,8 @@ details.callout summary { color: inherit; }
 .changes-table td { vertical-align: top; }
 .cell-pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; max-height: 260px; overflow: auto; }
 textarea.mono { width: 100%; box-sizing: border-box; }
+/* Loginpagina: accountherstel */
+.login-form.recovery { text-align: left; display: flex; flex-direction: column; gap: 10px; }
+.recovery-command { max-width: none; white-space: pre-wrap; word-break: break-all; user-select: all; margin: 0; }
+.recovery-code { font-size: 14px; font-weight: 600; text-align: center; word-break: normal; overflow-wrap: anywhere; }
+.login-help-link { align-self: center; color: var(--primary); text-decoration: underline; cursor: pointer; }
