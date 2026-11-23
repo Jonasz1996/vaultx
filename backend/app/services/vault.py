@@ -28,11 +28,20 @@ from app.core.security import (
     seal_secret,
     verify_master_password,
 )
-from app.models import UserSession, VaultAccount, VaultCipher, VaultDevice, VaultFolder, WebAuthnCredential
+from app.models import (
+    UserSession,
+    VaultAccount,
+    VaultCipher,
+    VaultCipherVersion,
+    VaultDevice,
+    VaultFolder,
+    WebAuthnCredential,
+)
 from app.models.base import new_uuid
 from app.repositories import (
     VaultAccountRepository,
     VaultCipherRepository,
+    VaultCipherVersionRepository,
     VaultDeviceRepository,
     VaultFolderRepository,
     VaultNoteRepository,
@@ -61,6 +70,52 @@ class StaleCipherError(Exception):
     """De client werkt met een verouderde versie van het item."""
 
 
+# Zoveel vorige versies bewaart VaultX per item (bij elke wijziging en bij definitief verwijderen).
+CIPHER_VERSIONS_KEPT = 50
+
+# Velden van een login waarvan het verdwijnen bij een update in het auditlog komt.
+_LOGIN_FIELDS = ("username", "password", "totp", "uris", "fido2Credentials")
+
+
+def removed_fields(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
+    """Welke ingevulde velden een update leegmaakt of weglaat (enkel namen, geen inhoud).
+
+    De server kan de versleutelde waarden niet lezen, maar wel zien dat bv. `login.totp`
+    eerst een EncString was en nu ontbreekt. Dat maakt een stil verlies zichtbaar.
+    """
+
+    def filled(v: Any) -> bool:
+        return v not in (None, "", [], {})
+
+    out = [k for k, v in old.items() if k != "login" and filled(v) and not filled(new.get(k))]
+    old_login, new_login = old.get("login"), new.get("login")
+    if isinstance(old_login, dict):
+        new_login = new_login if isinstance(new_login, dict) else {}
+        out += [
+            f"login.{k}" for k in _LOGIN_FIELDS if filled(old_login.get(k)) and not filled(new_login.get(k))
+        ]
+    return sorted(out)
+
+
+def next_revision(previous: datetime | None) -> datetime:
+    """Nieuwe revisiedatum: hele milliseconden (zoals clients ze terugsturen), strikt stijgend."""
+    now = datetime.now(UTC)
+    now = now.replace(microsecond=now.microsecond // 1000 * 1000)
+    if previous is not None and previous >= now:
+        prev_ms = previous.replace(microsecond=previous.microsecond // 1000 * 1000)
+        now = prev_ms + timedelta(milliseconds=1)
+    return now
+
+
+def is_stale(current: datetime, last_known: datetime) -> bool:
+    """Is de kopie van de client ouder dan wat de server heeft?
+
+    Clients kennen de revisie tot op de milliseconde (JavaScript-datums); oudere revisies
+    in de database hebben nog microseconden. Minder dan 1 ms verschil telt dus als gelijk.
+    """
+    return abs(current - last_known.astimezone(UTC)) >= timedelta(milliseconds=1)
+
+
 def new_security_stamp() -> str:
     return secrets.token_hex(16)
 
@@ -84,6 +139,7 @@ class VaultService:
         self.devices = VaultDeviceRepository(db)
         self.folders = VaultFolderRepository(db)
         self.ciphers = VaultCipherRepository(db)
+        self.versions = VaultCipherVersionRepository(db)
         self.notes = VaultNoteRepository(db)
         self.audit = AuditService(db)
 
@@ -592,9 +648,7 @@ class VaultService:
         """Lockt het account en zet een nieuwe revisiedatum (strikt stijgend)."""
         account = await self.accounts.lock(c.account.user_id)
         assert account is not None
-        now = datetime.now(UTC)
-        if account.revision_date >= now:
-            now = account.revision_date + timedelta(microseconds=1)
+        now = next_revision(account.revision_date)
         account.revision_date = now
         c.account = account
         return now
@@ -750,26 +804,117 @@ class VaultService:
         archived_at: datetime | None,
         last_known_revision: datetime | None,
     ) -> VaultCipher:
-        cipher = await self.get_cipher(c, cipher_id)
-        # Zelfde regel als Bitwarden: een client met een oudere kopie mag niet overschrijven.
-        # Eén seconde marge, want clients ronden af op milliseconden.
-        if (
-            last_known_revision is not None
-            and abs((cipher.revision_date - last_known_revision.astimezone(UTC)).total_seconds()) > 1
-        ):
+        # Eerst het account locken (zoals elke schrijfactie op de kluis), dan pas het item
+        # opnieuw lezen en vergelijken. Anders kunnen twee gelijktijdige opslagen van dezelfde
+        # oude kopie allebei de controle doorstaan en overschrijft de tweede de eerste.
+        now = await self._touch(c)
+        cipher = await self.ciphers.owned(c.account.user_id, cipher_id, fresh=True)
+        if cipher is None:
+            raise NotFoundError("Item niet gevonden")
+        # Een client met een oudere kopie mag niet overschrijven. Bitwarden-server laat hier
+        # één seconde marge; daardoor won een tweede opslag van dezelfde oude kopie binnen
+        # die seconde toch. Revisies zijn nu hele, strikt stijgende milliseconden, dus de
+        # kopie klopt enkel als ze op de milliseconde gelijk is.
+        if last_known_revision is not None and is_stale(cipher.revision_date, last_known_revision):
+            # Niets wijzigen, wel vastleggen dat een verouderde kopie geweigerd werd.
+            actor, label = c.actor, c.client_label
+            await self.db.rollback()
+            await self.audit.record(
+                "vault.item.update",
+                actor,
+                outcome="denied",
+                target_type="vault_item",
+                target_id=cipher_id,
+                details={
+                    "client": label,
+                    "reden": "verouderde kopie",
+                    "client_revisie": last_known_revision.astimezone(UTC).isoformat(),
+                },
+            )
+            await self.db.commit()
             raise StaleCipherError()
         folder_id = await self._folder_id(c, folder_id)
-        now = await self._touch(c)
+        version = await self._keep_version(c, cipher, "update")
+        removed = removed_fields(cipher.data or {}, payload)
         cipher.type = type_
         cipher.data = payload
         cipher.folder_id = folder_id
         cipher.favorite = favorite
         cipher.archived_at = archived_at
         cipher.revision_date = now
-        await self._record(c, "vault.item.update", "vault_item", cipher.id, type=type_)
+        details: dict[str, Any] = {"type": type_, "versie": version.id}
+        if last_known_revision is None:
+            # Bitwarden laat dit toe; we noteren het, want zo'n opslag is niet gecontroleerd.
+            details["revisiecontrole"] = "ontbrak"
+        if removed:
+            details["verwijderde_velden"] = removed
+        await self._record(c, "vault.item.update", "vault_item", cipher.id, **details)
         await self.push(c, PushType.SYNC_CIPHER_UPDATE, cipher.id, now)
         await self.db.commit()
         return cipher
+
+    async def _keep_version(
+        self, c: VaultCaller | None, cipher: VaultCipher, reason: str
+    ) -> VaultCipherVersion:
+        """Bewaart de huidige (versleutelde) stand van het item vóór het overschreven wordt."""
+        version = self.versions.add(
+            VaultCipherVersion(
+                cipher_id=cipher.id,
+                user_id=cipher.user_id,
+                type=cipher.type,
+                data=cipher.data,
+                folder_id=cipher.folder_id,
+                favorite=cipher.favorite,
+                revision_date=cipher.revision_date,
+                deleted_at=cipher.deleted_at,
+                archived_at=cipher.archived_at,
+                replaced_at=datetime.now(UTC),
+                reason=reason,
+                replaced_by=c.client_label[:320] if c is not None else "beheerder",
+            )
+        )
+        await self.db.flush()
+        await self.versions.prune(cipher.id, CIPHER_VERSIONS_KEPT)
+        return version
+
+    async def restore_version_as_copy(self, user_id: UUID, version_id: int, actor: Any) -> VaultCipher:
+        """Zet een bewaarde versie terug als NIEUW item naast het huidige (nooit overschrijven).
+
+        Zo kies je zelf in de app welke versie klopt en verwijder je daarna de andere.
+        """
+        version = await self.versions.owned(user_id, version_id)
+        if version is None:
+            raise NotFoundError("Versie niet gevonden")
+        account = await self.accounts.lock(user_id)
+        assert account is not None
+        now = next_revision(account.revision_date)
+        account.revision_date = now
+        folder_id = version.folder_id
+        if folder_id is not None and await self.folders.owned(user_id, folder_id) is None:
+            folder_id = None
+        copy = self.ciphers.add(
+            VaultCipher(
+                user_id=user_id,
+                folder_id=folder_id,
+                type=version.type,
+                data=version.data,
+                favorite=version.favorite,
+                created_at=now,
+                revision_date=now,
+                archived_at=version.archived_at,
+            )
+        )
+        await self.db.flush()
+        await self.audit.record(
+            "vault.item.restore_version",
+            actor,
+            target_type="vault_item",
+            target_id=copy.id,
+            details={"versie": version.id, "van_item": str(version.cipher_id)},
+        )
+        await publish(self.db, user_id, PushType.SYNC_VAULT, revision=now)
+        await self.db.commit()
+        return copy
 
     async def update_cipher_partial(
         self, c: VaultCaller, cipher_id: UUID, *, folder_id: UUID | None, favorite: bool
@@ -816,7 +961,8 @@ class VaultService:
         now = await self._touch(c)
         await self._push_many(c, ciphers, PushType.SYNC_LOGIN_DELETE, now)
         for cipher in ciphers:
-            await self._record(c, "vault.item.delete", "vault_item", cipher.id)
+            version = await self._keep_version(c, cipher, "delete")
+            await self._record(c, "vault.item.delete", "vault_item", cipher.id, versie=version.id)
             await self.ciphers.delete(cipher)
         await self.db.commit()
 

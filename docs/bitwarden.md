@@ -307,3 +307,32 @@ binnen 10 minuten opnieuw bent ingelogd), `POST /api/v1/me/vault/unlock`, `POST 
 `POST /api/v1/me/vault/2fa/{setup,enable,disable}`,
 `POST /api/v1/me/vault/devices/{id}/revoke` en (beheerder)
 `DELETE /api/v1/users/{id}/vault-2fa`.
+
+## Vorige versies van items (niets gaat stil verloren)
+
+Sinds migratie `0016_itemversies` bewaart VaultX vóór elke wijziging en vóór elk
+definitief verwijderen de vorige stand van een item in `vault_cipher_versions`
+(versleuteld, zoals het item zelf; de server kan ze niet lezen). Per item blijven de
+50 jongste versies bewaard. Een kluis verwijderen wist ook de versies.
+
+Bekijken en terugzetten, op de server als root:
+
+    set -a; . /etc/vaultx/vaultx.env; set +a; cd /opt/vaultx/backend
+    /opt/vaultx/venv/bin/python -m app.cli item-history jonas@example.com
+    /opt/vaultx/venv/bin/python -m app.cli item-history jonas@example.com --item <item-id>
+    /opt/vaultx/venv/bin/python -m app.cli item-restore jonas@example.com <versie>
+
+`item-history` toont per versie wanneer en door welk apparaat ze vervangen werd en welke
+velden ingevuld waren (bv. `totp`), nooit de inhoud. `item-restore` zet de versie terug als
+**extra** item naast het huidige; er wordt niets overschreven. Synchroniseer daarna je
+apps, kijk welke versie klopt en verwijder de andere.
+
+Verder:
+
+- Een opslag vanaf een verouderde kopie wordt geweigerd (de client vraagt dan om te
+  synchroniseren). De controle gebeurt onder de lock op de kluis en op de milliseconde,
+  dus twee gelijktijdige opslagen van dezelfde kopie kunnen niet allebei winnen.
+- Het auditlog (`vault.item.update`) noteert het apparaat, het versienummer, of de client
+  geen revisiedatum meestuurde (`revisiecontrole: ontbrak`) en welke ingevulde velden een
+  opslag leegmaakte (`verwijderde_velden`, bv. `login.totp`). Geweigerde opslagen staan er
+  met `outcome = denied`.
