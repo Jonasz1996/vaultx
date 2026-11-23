@@ -15,6 +15,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Identity,
     Integer,
     LargeBinary,
     String,
@@ -159,6 +160,35 @@ class VaultCipher(Base):
     revision_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VaultCipherVersion(Base):
+    """Vorige versie van een kluisitem, bewaard vóór elke wijziging of definitieve verwijdering.
+
+    Even versleuteld als het item zelf: de server kan ze niet lezen, maar wel terugzetten als
+    kopie. Zo kan een item dat een client (per ongeluk) overschreef, hersteld worden zonder
+    databasedump. Geen foreign key naar vault_ciphers: versies overleven het verwijderen.
+    """
+
+    __tablename__ = "vault_cipher_versions"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    cipher_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vault_accounts.user_id", ondelete="CASCADE"), index=True
+    )
+    type: Mapped[int] = mapped_column(Integer)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    favorite: Mapped[bool] = mapped_column(default=False)
+    # De revisiedatum die deze versie had toen ze nog de actuele was.
+    revision_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Wanneer, waarom (update | delete) en door welk apparaat ze vervangen werd.
+    replaced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    reason: Mapped[str] = mapped_column(String(16))
+    replaced_by: Mapped[str | None] = mapped_column(String(320))
 
 
 class VaultAttachment(Base):

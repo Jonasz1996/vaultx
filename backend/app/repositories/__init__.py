@@ -22,6 +22,7 @@ from app.repositories.users import UserRepository
 from app.repositories.vault import (
     VaultAccountRepository,
     VaultCipherRepository,
+    VaultCipherVersionRepository,
     VaultDeviceRepository,
     VaultFolderRepository,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "UserRepository",
     "VaultAccountRepository",
     "VaultCipherRepository",
+    "VaultCipherVersionRepository",
     "VaultDeviceRepository",
     "VaultFolderRepository",
     "WebAuthnCredentialRepository",
