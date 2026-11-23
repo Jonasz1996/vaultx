@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -39,9 +40,18 @@ from app.services.webauthn import SCOPE_LOGIN, WebAuthnError, WebAuthnService
 log = logging.getLogger(__name__)
 
 WRONG_CREDENTIALS = "Gebruikersnaam of wachtwoord is onjuist"
+TEMPORARY_EXPIRED = (
+    "Je tijdelijke wachtwoord is verlopen. Vraag je systeembeheerder om je account opnieuw te resetten."
+)
 MAX_PASSWORD_LENGTH = 1024
 # Zo lang heb je na een juist wachtwoord om je sleutel aan te raken.
 SECOND_STEP_SECONDS = 300
+# Zo lang heb je na het tijdelijke wachtwoord om een eigen wachtwoord te kiezen.
+TEMPORARY_CHANGE_SECONDS = 900
+# Standaard geldigheid van een tijdelijk wachtwoord (app.cli reset-account).
+TEMPORARY_PASSWORD_MINUTES = 60
+# Geen tekens die op elkaar lijken (0/O, 1/l/I): het wachtwoord wordt overgetypt.
+_TEMP_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
 @dataclass(slots=True)
@@ -50,6 +60,19 @@ class SecondStep:
 
     ticket: str
     options: dict[str, Any] | None
+
+
+@dataclass(slots=True)
+class PasswordChangeRequired:
+    """Tijdelijk wachtwoord klopt: eerst een eigen wachtwoord kiezen, dan pas een sessie."""
+
+    ticket: str
+    expires_at: datetime
+
+
+def new_temporary_password() -> str:
+    """Vier groepen van vijf tekens (ruim 110 bits), makkelijk over te typen."""
+    return "-".join("".join(secrets.choice(_TEMP_ALPHABET) for _ in range(5)) for _ in range(4))
 
 
 def check_password_policy(settings: Settings, password: str, user: User | None = None) -> None:
@@ -65,6 +88,15 @@ def set_password(user: User, password: str) -> None:
     user.password_changed_at = datetime.now(UTC)
     user.failed_logins = 0
     user.locked_until = None
+    # Een gewoon (nieuw) wachtwoord is nooit tijdelijk; zie set_temporary_password.
+    user.password_temporary_until = None
+
+
+def set_temporary_password(user: User, password: str, minutes: int = TEMPORARY_PASSWORD_MINUTES) -> datetime:
+    """Tijdelijk wachtwoord: werkt `minutes` lang, en enkel om een eigen wachtwoord te kiezen."""
+    set_password(user, password)
+    user.password_temporary_until = datetime.now(UTC) + timedelta(minutes=minutes)
+    return user.password_temporary_until
 
 
 class PasswordLoginService:
@@ -77,15 +109,35 @@ class PasswordLoginService:
     def _tickets(self) -> URLSafeTimedSerializer:
         return URLSafeTimedSerializer(self.settings.secret_key.get_secret_value(), salt="vaultx/login-2fa/v1")
 
+    def _change_tickets(self) -> URLSafeTimedSerializer:
+        return URLSafeTimedSerializer(
+            self.settings.secret_key.get_secret_value(), salt="vaultx/login-temp/v1"
+        )
+
     @staticmethod
     def _password_mark(user: User) -> str:
         # Ticket vervalt als het wachtwoord intussen wijzigt.
         return hash_token(user.password_hash or "")[:16]
 
-    async def login(self, login: str, password: str, meta: RequestMeta) -> User | SecondStep:
+    async def login(
+        self, login: str, password: str, meta: RequestMeta
+    ) -> User | SecondStep | PasswordChangeRequired:
         """Wachtwoord controleren. Zonder sleutels: de ingelogde gebruiker; met sleutels: een
-        tweede stap (nog geen sessie, geen geslaagde login in de auditlog)."""
+        tweede stap (nog geen sessie, geen geslaagde login in de auditlog). Met een tijdelijk
+        wachtwoord: eerst een eigen wachtwoord kiezen (ook nog geen sessie)."""
         user = await self.authenticate(login, password, meta, finish=False)
+        if user.password_temporary_until is not None:
+            await self.audit.record(
+                "auth.login",
+                Actor.for_user(user, meta),
+                outcome="denied",
+                target_type="user",
+                target_id=user.id,
+                details={"method": "password", "reason": "tijdelijk wachtwoord: eerst een eigen kiezen"},
+            )
+            await self.db.commit()
+            ticket = self._change_tickets().dumps({"u": str(user.id), "p": self._password_mark(user)})
+            return PasswordChangeRequired(ticket=ticket, expires_at=user.password_temporary_until)
         creds = await WebAuthnService(self.db, self.settings).credentials(user.id, SCOPE_LOGIN)
         if not creds:
             await self._finish(user, Actor.for_user(user, meta), password)
@@ -160,6 +212,45 @@ class PasswordLoginService:
         await self._finish(user, actor, None, second_step=via)
         return user
 
+    async def change_temporary(self, ticket: str, new_password: str, meta: RequestMeta) -> User:
+        """Eigen wachtwoord kiezen na het tijdelijke; daarna is de gebruiker ingelogd."""
+        expired = AuthenticationError("Het tijdelijke wachtwoord moet opnieuw ingevuld worden.")
+        try:
+            data = self._change_tickets().loads(ticket, max_age=TEMPORARY_CHANGE_SECONDS)
+            user_id = UUID(str(data["u"]))
+        except (BadSignature, KeyError, TypeError, ValueError):
+            raise expired from None
+        user = await self.db.get(User, user_id, with_for_update=True)
+        if (
+            user is None
+            or user.password_hash is None
+            or user.password_temporary_until is None
+            or data.get("p") != self._password_mark(user)
+        ):
+            raise expired
+        actor = Actor.for_user(user, meta)
+        if user.password_temporary_until <= datetime.now(UTC):
+            await self._deny(user, actor, "denied", "tijdelijk wachtwoord verlopen")
+            raise AuthenticationError(TEMPORARY_EXPIRED)
+        if not user.is_active:
+            await self._deny(user, actor, "denied", "account gedeactiveerd in VaultX")
+            raise AuthenticationError("Dit account is gedeactiveerd in VaultX")
+        check_password_policy(self.settings, new_password, user)
+        if await run_in_threadpool(verify_password, new_password, user.password_hash):
+            raise InvalidOperationError("Kies een ander wachtwoord dan het tijdelijke")
+        user.password_hash = await run_in_threadpool(hash_password, new_password)
+        user.password_changed_at = datetime.now(UTC)
+        user.password_temporary_until = None
+        await self.audit.record(
+            "user.password_change",
+            actor,
+            target_type="user",
+            target_id=user.id,
+            details={"via": "tijdelijk wachtwoord (accountherstel)"},
+        )
+        await self._finish(user, actor, None, second_step=None)
+        return user
+
     async def authenticate(
         self, login: str, password: str, meta: RequestMeta, *, finish: bool = True
     ) -> User:
@@ -193,6 +284,13 @@ class PasswordLoginService:
         if not user.is_active:
             await self._deny(user, actor, "denied", "account gedeactiveerd in VaultX")
             raise AuthenticationError("Dit account is gedeactiveerd in VaultX")
+        if user.password_temporary_until is not None and user.password_temporary_until <= now:
+            # Wie dit ziet, kende het tijdelijke wachtwoord al: geen lek.
+            await self._deny(user, actor, "denied", "tijdelijk wachtwoord verlopen")
+            raise AuthenticationError(TEMPORARY_EXPIRED)
+        if user.password_temporary_until is not None and finish:
+            # Elders (bv. wachtwoord bevestigen) telt een tijdelijk wachtwoord niet als login.
+            raise AuthenticationError(WRONG_CREDENTIALS)
 
         if finish:
             await self._finish(user, actor, password)

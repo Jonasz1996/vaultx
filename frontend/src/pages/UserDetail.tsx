@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import { api } from "../api/client";
 import { useMe } from "../api/hooks";
 import type { AuditPage, Session, UserDetail } from "../api/types";
@@ -16,6 +16,8 @@ export function UserDetailPage() {
   const qc = useQueryClient();
   const { data: me } = useMe();
   const isSelf = me?.id === userId;
+  const [params] = useSearchParams();
+  const restored = isSelf && params.has("hersteld");
   const user = useQuery({ queryKey: ["user", userId], queryFn: () => api.get<UserDetail>(`/api/v1/users/${userId}`) });
   const sessions = useQuery({
     queryKey: ["user", userId, "sessions"],
@@ -99,6 +101,14 @@ export function UserDetailPage() {
       />
       <ErrorBox error={toggle.error ?? revoke.error ?? setAdmin.error ?? removePassword.error} />
       {pwDone && <div className="info-box">{pwDone}</div>}
+      {restored && (
+        <div className="info-box">
+          <strong>Je account is hersteld.</strong> Je nieuwe wachtwoord is ingesteld. Stel nu je tweestapsverificatie
+          opnieuw in: een beveiligingssleutel of passkey voor je login (hieronder, bij{" "}
+          <em>Beveiligingssleutels voor het wachtwoordlogin</em>) en de tweestapsverificatie van je kluis op{" "}
+          <Link to="/vault/settings">Mijn kluis</Link>. Je kluis zelf en je master password zijn niet gewijzigd.
+        </div>
+      )}
       <div className="grid-2">
         <Card title="Identiteit">
           <dl className="kv">

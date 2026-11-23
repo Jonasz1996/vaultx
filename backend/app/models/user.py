@@ -44,12 +44,19 @@ class User(TimestampMixin, Base):
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Herstelcode voor de tweede stap na het wachtwoord (beveiligingssleutel kwijt), SHA-256.
     login_recovery_code_hash: Mapped[str | None] = mapped_column(String(64))
+    # Tijdelijk wachtwoord van `app.cli reset-account`: geldig tot dit moment en enkel om bij de
+    # eerste login een eigen wachtwoord te kiezen (geeft nog geen sessie). NULL = gewoon wachtwoord.
+    password_temporary_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     memberships = relationship("Membership", back_populates="user", cascade="all, delete-orphan")
 
     @property
     def has_password(self) -> bool:
         return self.password_hash is not None
+
+    @property
+    def password_is_temporary(self) -> bool:
+        return self.password_temporary_until is not None
 
     @property
     def has_authentik(self) -> bool:

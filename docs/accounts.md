@@ -64,6 +64,72 @@ aanraken. Bij de eerste sleutel krijg je eenmalig een **herstelcode**; bewaar di
 Wachtwoordlogin helemaal uitzetten: `VAULTX_LOCAL_LOGIN_ENABLED=false`. De loginpagina toont dan
 enkel Authentik en bestaande wachtwoorden werken niet meer (ze blijven wel bewaard).
 
+## Accountherstel: kan niet meer inloggen
+
+Wachtwoord vergeten, of je beveiligingssleutel én herstelcode kwijt? Dan reset een beheerder je
+account met één commando op de server. Er gaat geen e-mail uit.
+
+**Voor de gebruiker.** Op de gewone loginpagina (met automatisch doorsturen naar Authentik:
+`/login?lokaal=1`, of meteen `/login?herstel=1`) staat de link *Wachtwoord vergeten of kan je niet
+inloggen?*. Daar vul je je gebruikersnaam of e-mailadres in en klik je *Herstelcode aanvragen*.
+Je krijgt een **herstelcode** zoals `carol@example.com.K7QM-3XPA-9D2F-HJ4N`, met het commando
+voor je beheerder erbij. Geef de code aan je beheerder.
+
+- De code hoort bij een openstaand verzoek op de server: 24 uur geldig, werkt één keer, en een
+  nieuwe aanvraag voor dezelfde login maakt de vorige ongeldig. In de database staat enkel een
+  hash van het geheime deel. Een zelfverzonnen code (andere naam, ander geheim deel) werkt niet.
+- Elke invoer krijgt dezelfde bevestiging en een code van dezelfde vorm: de server zoekt het
+  account bij de aanvraag niet op. Zo kan niemand er e-mailadressen mee uitproberen.
+- Hoogstens 500 openstaande verzoeken tegelijk; daarboven wordt een code wel getoond maar niet
+  bewaard (bescherming tegen iemand die de tabel volschrijft).
+
+**Voor de beheerder**: plak de code in één commando op de VaultX-server (bij een
+ClusterForge-cluster op één van de nodes), als root. De loginpagina toont het volledige commando:
+
+```bash
+set -a; . /etc/vaultx/vaultx.env; set +a; cd /opt/vaultx/backend && \
+  /opt/vaultx/venv/bin/python -m app.cli reset-account 'carol@example.com.K7QM-3XPA-9D2F-HJ4N'
+```
+
+VaultX zoekt het account bij het verzoek, toont wie het is, wanneer en vanaf welk adres de code
+werd aangevraagd, en meteen het tijdelijke wachtwoord. Geef dat wachtwoord enkel aan de persoon
+zelf: wie de code inlevert, is nog niet bewezen de eigenaar van het account. Zonder code kan het
+ook rechtstreeks: `reset-account --login carol@example.com`.
+
+Dat doet in één keer:
+
+- een **tijdelijk wachtwoord** maken en tonen (vier groepen van vijf tekens). Het werkt
+  **één uur** (`--minutes 30` voor korter, hoogstens 7 dagen) en geeft zelf geen toegang: bij de
+  eerste login moet de gebruiker meteen een eigen wachtwoord kiezen, pas daarna is er een sessie.
+  Verlopen? Dan voer je het commando opnieuw uit;
+- de **MFA van het VaultX-login** weghalen: beveiligingssleutels, passkeys en herstelcode;
+- de **tweestapsverificatie van de kluis** uitzetten (authenticator-app/TOTP, sleutels en
+  herstelcode voor de Bitwarden-apps), tenzij je `--keep-vault-2fa` meegeeft;
+- **alle VaultX-sessies** van de gebruiker intrekken, ook die via Authentik, en een
+  vergrendeling na foute wachtwoorden opheffen (een gedeactiveerd account wordt weer actief);
+- alles in de **auditlog** zetten (`user.account_reset`, met wat er gereset is en het verzoek
+  achter de code; daarna
+  `user.password_change` als de gebruiker een eigen wachtwoord kiest).
+
+Zelf het tijdelijke wachtwoord kiezen kan met `--password-stdin`. Geef het tijdelijke wachtwoord
+persoonlijk door. Na het nieuwe wachtwoord komt de gebruiker op zijn eigen pagina, met de vraag
+om zijn beveiligingssleutel en de tweestapsverificatie van zijn kluis opnieuw in te stellen.
+
+**Wat niet gereset wordt: de kluis.** VaultX heeft twee lagen:
+
+| Laag | Wachtwoord | Reset door beheerder? |
+| --- | --- | --- |
+| VaultX-login (deze pagina's, fase 8) | VaultX-wachtwoord, op de server als Argon2id-hash | Ja, met `reset-account` |
+| Kluis (Mijn kluis, Bitwarden-apps) | master password, verlaat de browser nooit | **Nee** |
+
+De kluis is in je browser versleuteld met een sleutel uit je master password; de server kent die
+sleutel niet. Een beheerder kan het master password dus niet resetten zonder dat de inhoud
+verloren gaat, en `reset-account` raakt het nooit aan. Wie zijn master password kwijt is, kan
+enkel de kluis opnieuw aanmaken, zonder de oude items.
+
+Wie via Authentik inlogt, herstelt zijn Authentik-wachtwoord en -MFA in Authentik. `reset-account`
+geeft zo'n account wel een tijdelijk VaultX-wachtwoord, als noodtoegang naast Authentik.
+
 ## Noodtoegang vanaf de commandolijn
 
 Ligt Authentik plat en heeft niemand een wachtwoord, dan kan je op de server zelf een account
