@@ -1,7 +1,7 @@
 """account reset: reset requests with a code, temporary password changed at the first login
 
 Revision ID: 0016_herstel
-Revises: 0015
+Revises: 0016_itemversies
 Create Date: 2026-11-23 19:00:00.000000
 
 De revisie heet bewust niet '0016': andere openstaande werkstukken nummeren ook na 0015.
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = '0016_herstel'
-down_revision: str | None = '0015'
+down_revision: str | None = '0016_itemversies'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

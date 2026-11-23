@@ -19,7 +19,15 @@ from app.models.notes import VaultNote, VaultNoteFile, VaultNoteVersion
 from app.models.organization import Organization, Team
 from app.models.session import UserSession
 from app.models.user import User
-from app.models.vault import KdfType, VaultAccount, VaultAttachment, VaultCipher, VaultDevice, VaultFolder
+from app.models.vault import (
+    KdfType,
+    VaultAccount,
+    VaultAttachment,
+    VaultCipher,
+    VaultCipherVersion,
+    VaultDevice,
+    VaultFolder,
+)
 from app.models.webauthn import WebAuthnCredential
 
 __all__ = [
@@ -52,6 +60,7 @@ __all__ = [
     "VaultAccount",
     "VaultAttachment",
     "VaultCipher",
+    "VaultCipherVersion",
     "VaultDevice",
     "VaultFolder",
     "WebAuthnCredential",

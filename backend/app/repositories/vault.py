@@ -1,8 +1,8 @@
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
-from app.models import VaultAccount, VaultCipher, VaultDevice, VaultFolder
+from app.models import VaultAccount, VaultCipher, VaultCipherVersion, VaultDevice, VaultFolder
 from app.repositories.base import Repository
 
 
@@ -60,10 +60,12 @@ class VaultFolderRepository(Repository[VaultFolder]):
 class VaultCipherRepository(Repository[VaultCipher]):
     model = VaultCipher
 
-    async def owned(self, user_id: UUID, cipher_id: UUID) -> VaultCipher | None:
-        return await self.db.scalar(
-            select(VaultCipher).where(VaultCipher.id == cipher_id, VaultCipher.user_id == user_id)
-        )
+    async def owned(self, user_id: UUID, cipher_id: UUID, *, fresh: bool = False) -> VaultCipher | None:
+        """`fresh` leest de laatst vastgelegde stand opnieuw uit de database (na een lock)."""
+        stmt = select(VaultCipher).where(VaultCipher.id == cipher_id, VaultCipher.user_id == user_id)
+        if fresh:
+            stmt = stmt.execution_options(populate_existing=True)
+        return await self.db.scalar(stmt)
 
     async def owned_many(self, user_id: UUID, cipher_ids: list[UUID]) -> list[VaultCipher]:
         if not cipher_ids:
@@ -90,3 +92,37 @@ class VaultCipherRepository(Repository[VaultCipher]):
             )
         ).one()
         return int(row[0]), int(row[1])
+
+
+class VaultCipherVersionRepository(Repository[VaultCipherVersion]):
+    model = VaultCipherVersion
+
+    async def for_user(
+        self, user_id: UUID, cipher_id: UUID | None = None, limit: int = 200
+    ) -> list[VaultCipherVersion]:
+        stmt = select(VaultCipherVersion).where(VaultCipherVersion.user_id == user_id)
+        if cipher_id is not None:
+            stmt = stmt.where(VaultCipherVersion.cipher_id == cipher_id)
+        rows = await self.db.scalars(stmt.order_by(VaultCipherVersion.id.desc()).limit(limit))
+        return list(rows)
+
+    async def owned(self, user_id: UUID, version_id: int) -> VaultCipherVersion | None:
+        return await self.db.scalar(
+            select(VaultCipherVersion).where(
+                VaultCipherVersion.id == version_id, VaultCipherVersion.user_id == user_id
+            )
+        )
+
+    async def prune(self, cipher_id: UUID, keep: int) -> None:
+        """Houdt per item enkel de `keep` jongste versies."""
+        newest = (
+            select(VaultCipherVersion.id)
+            .where(VaultCipherVersion.cipher_id == cipher_id)
+            .order_by(VaultCipherVersion.id.desc())
+            .limit(keep)
+        )
+        await self.db.execute(
+            delete(VaultCipherVersion).where(
+                VaultCipherVersion.cipher_id == cipher_id, VaultCipherVersion.id.not_in(newest)
+            )
+        )

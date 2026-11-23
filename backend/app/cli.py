@@ -5,6 +5,8 @@
     python -m app.cli reset-vault-2fa jonas@example.com    # telefoon, sleutels en herstelcode kwijt
     python -m app.cli reset-login-2fa jonas                # sleutel voor het wachtwoordlogin kwijt
     python -m app.cli reset-account '<herstelcode>'          # kan niet inloggen: code van de loginpagina
+    python -m app.cli item-history jonas@example.com      # vorige versies van kluisitems
+    python -m app.cli item-restore jonas@example.com 42   # versie 42 terugzetten als extra item
     python -m app.cli import-linkwarden --dsn postgresql://linkwarden@db/linkwarden --to jonas
 
 Het wachtwoord wordt gevraagd (twee keer, zonder echo) of met --password-stdin van stdin gelezen.
@@ -265,6 +267,69 @@ async def reset_account(
         )
 
 
+async def _vault_account(db, email: str):
+    from app.repositories import VaultAccountRepository
+    from app.services.vault_auth import normalize_email
+
+    account = await VaultAccountRepository(db).by_email(normalize_email(email))
+    if account is None:
+        raise VaultXError(f"Geen kluis voor {email!r}")
+    return account
+
+
+def _present(data: dict) -> str:
+    """Welke velden ingevuld zijn (namen, geen inhoud: alles is versleuteld)."""
+    login = data.get("login") if isinstance(data.get("login"), dict) else {}
+    marks = [
+        name
+        for name, value in (
+            ("gebruiker", login.get("username")),
+            ("wachtwoord", login.get("password")),
+            ("totp", login.get("totp")),
+            ("uris", login.get("uris")),
+            ("passkey", login.get("fido2Credentials")),
+            ("notities", data.get("notes")),
+            ("velden", data.get("fields")),
+            ("geschiedenis", data.get("passwordHistory")),
+        )
+        if value
+    ]
+    return ",".join(marks) or "-"
+
+
+async def item_history(email: str, item: str | None, limit: int) -> int:
+    from uuid import UUID
+
+    from app.repositories import VaultCipherVersionRepository
+
+    async with get_sessionmaker()() as db:
+        account = await _vault_account(db, email)
+        rows = await VaultCipherVersionRepository(db).for_user(
+            account.user_id, UUID(item) if item else None, limit
+        )
+    if not rows:
+        print("Geen bewaarde versies.")
+        return 0
+    print("versie\titem\tvervangen op (lokaal)\treden\tdoor\tversie was van\tingevuld")
+    for v in rows:
+        print(
+            f"{v.id}\t{v.cipher_id}\t{v.replaced_at.astimezone():%Y-%m-%d %H:%M:%S}\t{v.reason}\t"
+            f"{v.replaced_by or '-'}\t{v.revision_date.astimezone():%Y-%m-%d %H:%M:%S}\t{_present(v.data)}"
+        )
+    return 0
+
+
+async def item_restore(email: str, version_id: int) -> str:
+    from app.services.vault import VaultService
+
+    async with get_sessionmaker()() as db:
+        account = await _vault_account(db, email)
+        copy = await VaultService(db).restore_version_as_copy(
+            account.user_id, version_id, Actor.system("cli", RequestMeta())
+        )
+        return str(copy.id)
+
+
 async def _find_user(db, login: str) -> User:
     name = login.strip().lower()
     matches = [
@@ -405,6 +470,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Zelf het tijdelijke wachtwoord geven (stdin) in plaats van er een te laten maken",
     )
+    ih = sub.add_parser("item-history", help="Vorige versies van kluisitems tonen")
+    ih.add_argument("email", help="E-mailadres van de kluis")
+    ih.add_argument("--item", help="Enkel dit item (id)")
+    ih.add_argument("--limit", type=int, default=100)
+    ir = sub.add_parser(
+        "item-restore", help="Een vorige versie terugzetten als extra item (overschrijft niets)"
+    )
+    ir.add_argument("email", help="E-mailadres van de kluis")
+    ir.add_argument("version", type=int, help="Versienummer uit item-history")
     li = sub.add_parser(
         "import-linkwarden",
         help="Links importeren uit een Linkwarden-database, Linkwarden-export (JSON) of bladwijzers (HTML)",
@@ -436,6 +510,25 @@ def main(argv: list[str] | None = None) -> int:
         except (VaultXError, OSError, ValueError) as exc:
             print(f"Fout: {getattr(exc, 'message', exc)}", file=sys.stderr)
             return 1
+
+    if args.command in ("item-history", "item-restore"):
+
+        async def run_items() -> int | str:
+            try:
+                if args.command == "item-history":
+                    return await item_history(args.email, args.item, args.limit)
+                return await item_restore(args.email, args.version)
+            finally:
+                await dispose_engine()
+
+        try:
+            result = asyncio.run(run_items())
+        except (VaultXError, ValueError) as exc:
+            print(f"Fout: {getattr(exc, 'message', exc)}", file=sys.stderr)
+            return 1
+        if args.command == "item-restore":
+            print(f"OK: versie {args.version} staat terug als nieuw item {result}. Synchroniseer je apps.")
+        return 0
 
     if args.command == "reset-vault-2fa":
 
