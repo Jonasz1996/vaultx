@@ -28,7 +28,12 @@ from app.repositories import UserRepository
 from app.services.audit import AuditService
 from app.services.identity import IdentityService
 from app.services.oidc import OIDCError
-from app.services.password_login import MAX_PASSWORD_LENGTH, PasswordLoginService, SecondStep
+from app.services.password_login import (
+    MAX_PASSWORD_LENGTH,
+    PasswordChangeRequired,
+    PasswordLoginService,
+    SecondStep,
+)
 from app.services.principal import Actor
 from app.services.sessions import SessionService
 
@@ -296,6 +301,15 @@ async def password_login(
         # Ook hier: geen login vanuit een formulier op een andere site (login-CSRF).
         raise PermissionDeniedError("CSRF-header ontbreekt")
     result = await PasswordLoginService(db, settings).login(data.login, data.password, meta)
+    if isinstance(result, PasswordChangeRequired):
+        # Tijdelijk wachtwoord (accountherstel): eerst een eigen wachtwoord kiezen, nog geen sessie.
+        return JSONResponse(
+            {
+                "password_change": "required",
+                "ticket": result.ticket,
+                "temporary_until": result.expires_at.isoformat(),
+            }
+        )
     if isinstance(result, SecondStep):
         # Wachtwoord klopt; nu de beveiligingssleutel (of de herstelcode), nog geen sessie.
         return JSONResponse(
@@ -313,6 +327,28 @@ async def _password_session(
     resp = JSONResponse({"redirect_url": safe_next(next)})
     _session_cookie(resp, request, settings, token)
     return resp
+
+
+class TemporaryPasswordChange(BaseModel):
+    ticket: str = Field(min_length=1, max_length=512)
+    new_password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH)
+
+
+@router.post(
+    "/password/change-temporary",
+    summary="Eigen wachtwoord kiezen na een tijdelijk wachtwoord (accountherstel)",
+    responses={401: {"description": "Verlopen"}, 422: {"description": "Zelfde als het tijdelijke"}},
+)
+async def password_change_temporary(
+    data: TemporaryPasswordChange, request: Request, db: DbSession, settings: SettingsDep, meta: MetaDep
+) -> Response:
+    if not settings.local_login_enabled:
+        raise NotFoundError("Inloggen met een wachtwoord staat uit")
+    if request.headers.get(CSRF_HEADER) != "1":
+        raise PermissionDeniedError("CSRF-header ontbreekt")
+    user = await PasswordLoginService(db, settings).change_temporary(data.ticket, data.new_password, meta)
+    # Altijd eerst naar de eigen pagina: daar stel je je beveiligingssleutel opnieuw in.
+    return await _password_session(request, db, settings, meta, user, f"/users/{user.id}?hersteld=1")
 
 
 class PasswordSecondStep(BaseModel):

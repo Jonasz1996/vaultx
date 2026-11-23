@@ -49,6 +49,99 @@ interface SecondStep {
   security_key_options: Record<string, unknown> | null;
 }
 
+/** Tijdelijk wachtwoord (accountherstel): eerst een eigen wachtwoord kiezen. */
+interface PasswordChange {
+  password_change: "required";
+  ticket: string;
+  temporary_until: string;
+}
+
+/** Waarde veilig tussen enkele aanhalingstekens voor een shell (bash). */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Wat de beheerder op de VaultX-server uitvoert (Debian-container, als root). */
+export function resetCommand(login: string): string {
+  return (
+    "set -a; . /etc/vaultx/vaultx.env; set +a; cd /opt/vaultx/backend && " +
+    `/opt/vaultx/venv/bin/python -m app.cli reset-account ${shellQuote(login.trim())}`
+  );
+}
+
+/**
+ * "Kan je niet inloggen?": toont enkel wat de beheerder moet uitvoeren. Er gaat niets naar de
+ * server, dus de tekst is altijd dezelfde en verraadt niet of een account bestaat.
+ */
+function CannotLogIn({ initial, onBack }: { initial: string; onBack: () => void }) {
+  const [email, setEmail] = useState(initial.includes("@") ? initial : "");
+  const [shown, setShown] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const command = shown ? resetCommand(shown) : "";
+  return (
+    <>
+      <p className="muted">Wachtwoord vergeten, of je beveiligingssleutel kwijt?</p>
+      {!shown ? (
+        <form
+          className="form login-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setShown(email.trim());
+          }}
+        >
+          <label className="field">
+            <span>Je inlog-e-mailadres</span>
+            <input
+              required
+              type="email"
+              autoComplete="email"
+              autoFocus
+              maxLength={320}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </label>
+          <button className="btn btn-primary btn-wide">Verder</button>
+          <button type="button" className="btn btn-ghost btn-wide" onClick={onBack}>
+            Terug naar inloggen
+          </button>
+        </form>
+      ) : (
+        <div className="login-form recovery">
+          <p>
+            Vraag aan je systeembeheerder om je account te resetten door dit commando uit te voeren op de VaultX-server
+            (als root):
+          </p>
+          <pre className="recovery-command" data-testid="reset-command">
+            {command}
+          </pre>
+          <button
+            type="button"
+            className="btn btn-wide"
+            onClick={() => {
+              void navigator.clipboard?.writeText(command).then(() => setCopied(true));
+            }}
+          >
+            {copied ? "Gekopieerd" : "Commando kopiëren"}
+          </button>
+          <p>
+            Je krijgt dan een <strong>tijdelijk wachtwoord</strong> waarmee je de toegang tot je account kan herstellen.
+            Het werkt één uur. Bij de eerste aanmelding kies je meteen een nieuw wachtwoord; daarna stel je je
+            tweestapsverificatie (beveiligingssleutel, authenticator-app) opnieuw in.
+          </p>
+          <p className="muted small">
+            Je kluis blijft versleuteld met je master password; dat kan niemand voor je resetten. Log je in via
+            Authentik? Dan regelt Authentik je wachtwoord en MFA.
+          </p>
+          <button type="button" className="btn btn-primary btn-wide" onClick={onBack}>
+            Terug naar inloggen
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function LoginPage() {
   const [params] = useSearchParams();
   const error = params.get("error");
@@ -61,6 +154,10 @@ export function LoginPage() {
   const [step, setStep] = useState<SecondStep | null>(null);
   const [recovery, setRecovery] = useState<string | null>(null);
   const [redirecting, setRedirecting] = useState(false);
+  const [change, setChange] = useState<PasswordChange | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [newPassword2, setNewPassword2] = useState("");
+  const [help, setHelp] = useState(params.has("herstel"));
   // ?lokaal=1: altijd de gewone loginpagina, nooit doorsturen (noodtoegang als Authentik plat ligt).
   const local = params.has("lokaal");
 
@@ -68,7 +165,7 @@ export function LoginPage() {
     api
       .get<Methods>("/auth/methods")
       .then((m) => {
-        const quiet = local || error || params.get("logged_out") || params.get("stil");
+        const quiet = local || error || params.get("logged_out") || params.get("stil") || params.has("herstel");
         if (!quiet && (m.silent || m.auto_redirect) && autoAllowed()) {
           setRedirecting(true);
           const query = new URLSearchParams({ next });
@@ -105,12 +202,21 @@ export function LoginPage() {
     setPending(true);
     setLoginError(null);
     try {
-      const res = await api.post<{ redirect_url: string } | SecondStep>("/auth/password", { login, password, next });
+      const res = await api.post<{ redirect_url: string } | SecondStep | PasswordChange>("/auth/password", {
+        login,
+        password,
+        next,
+      });
       if ("redirect_url" in res) {
         window.location.assign(res.redirect_url);
         return;
       }
       setPassword("");
+      if ("password_change" in res) {
+        setChange(res);
+        setPending(false);
+        return;
+      }
       setStep(res);
       setPending(false);
       if (res.security_key_options && webAuthnSupported()) void withKey(res);
@@ -140,11 +246,36 @@ export function LoginPage() {
     }
   };
 
+  const submitChange = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!change) return;
+    if (newPassword !== newPassword2) {
+      setLoginError(new Error("De wachtwoorden zijn niet gelijk"));
+      return;
+    }
+    setPending(true);
+    setLoginError(null);
+    try {
+      const res = await api.post<{ redirect_url: string }>("/auth/password/change-temporary", {
+        ticket: change.ticket,
+        new_password: newPassword,
+      });
+      window.location.assign(res.redirect_url);
+    } catch (err) {
+      setLoginError(err);
+      setPending(false);
+      // Verlopen: terug naar het tijdelijke wachtwoord.
+      if ((err as { status?: number })?.status === 401) setChange(null);
+    }
+  };
+
   const withKey = async (s: SecondStep) => {
     if (!s.security_key_options) return;
     setLoginError(null);
     try {
-      await finish(s, { security_key: await getAssertion(s.security_key_options) });
+      await finish(s, {
+        security_key: await getAssertion(s.security_key_options),
+      });
     } catch (err) {
       setLoginError(err);
     }
@@ -164,12 +295,43 @@ export function LoginPage() {
         </p>
         {params.get("logged_out") && <div className="info-box">Je bent uitgelogd.</div>}
         {local && methods.authentik && (methods.silent || methods.auto_redirect) && (
-          <div className="info-box small">
-            Noodtoegang: VaultX stuurt je hier niet automatisch naar Authentik.
-          </div>
+          <div className="info-box small">Noodtoegang: VaultX stuurt je hier niet automatisch naar Authentik.</div>
         )}
         {error && <div className="error-box">{errors[error] ?? `Login mislukt (${error}).`}</div>}
-        {step && (
+        {help && <CannotLogIn initial={login} onBack={() => setHelp(false)} />}
+        {change && !help && (
+          <form className="form login-form" onSubmit={submitChange}>
+            <div className="info-box small">
+              Je logt in met een tijdelijk wachtwoord. Kies nu je eigen, nieuwe wachtwoord.
+            </div>
+            <label className="field">
+              <span>Nieuw wachtwoord</span>
+              <input
+                required
+                autoFocus
+                type="password"
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Nogmaals</span>
+              <input
+                required
+                type="password"
+                autoComplete="new-password"
+                value={newPassword2}
+                onChange={(e) => setNewPassword2(e.target.value)}
+              />
+            </label>
+            <ErrorBox error={loginError} />
+            <button className="btn btn-primary btn-wide" disabled={pending}>
+              {pending ? "Bezig…" : "Wachtwoord instellen en inloggen"}
+            </button>
+          </form>
+        )}
+        {step && !help && (
           <form
             className="form login-form"
             onSubmit={(e) => {
@@ -186,8 +348,8 @@ export function LoginPage() {
               <>
                 {!step.security_key_options && (
                   <div className="info-box small">
-                    Je beveiligingssleutel werkt enkel op de domeinnaam van VaultX, niet op dit adres. Log daar in,
-                    of gebruik je herstelcode (die zet de sleutels voor je login uit).
+                    Je beveiligingssleutel werkt enkel op de domeinnaam van VaultX, niet op dit adres. Log daar in, of
+                    gebruik je herstelcode (die zet de sleutels voor je login uit).
                   </div>
                 )}
                 <label className="field">
@@ -222,7 +384,7 @@ export function LoginPage() {
             </div>
           </form>
         )}
-        {methods.password && !step && (
+        {methods.password && !step && !change && !help && (
           <>
             <form className="form login-form" onSubmit={submit}>
               <label className="field">
@@ -249,6 +411,13 @@ export function LoginPage() {
               <button className="btn btn-primary btn-wide" disabled={pending}>
                 {pending ? "Bezig…" : "Inloggen"}
               </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-wide small"
+                onClick={() => (setHelp(true), setLoginError(null))}
+              >
+                Wachtwoord vergeten of kan je niet inloggen?
+              </button>
             </form>
             {methods.authentik && (
               <div className="login-divider">
@@ -257,7 +426,7 @@ export function LoginPage() {
             )}
           </>
         )}
-        {methods.authentik && !step && (
+        {methods.authentik && !step && !change && !help && (
           <a
             className={methods.password ? "btn btn-wide" : "btn btn-primary btn-wide"}
             href={`/auth/login?next=${encodeURIComponent(next)}`}

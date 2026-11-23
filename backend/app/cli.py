@@ -4,6 +4,7 @@
     python -m app.cli set-password jonas
     python -m app.cli reset-vault-2fa jonas@example.com    # telefoon, sleutels en herstelcode kwijt
     python -m app.cli reset-login-2fa jonas                # sleutel voor het wachtwoordlogin kwijt
+    python -m app.cli reset-account jonas@example.com      # kan niet inloggen: MFA weg + tijdelijk wachtwoord
     python -m app.cli import-linkwarden --dsn postgresql://linkwarden@db/linkwarden --to jonas
 
 Het wachtwoord wordt gevraagd (twee keer, zonder echo) of met --password-stdin van stdin gelezen.
@@ -18,6 +19,8 @@ import argparse
 import asyncio
 import getpass
 import sys
+from dataclasses import dataclass
+from datetime import datetime
 
 from app.core.config import get_settings
 from app.core.context import RequestMeta
@@ -26,7 +29,13 @@ from app.core.errors import VaultXError
 from app.models import User
 from app.repositories import UserRepository
 from app.services.audit import AuditService
-from app.services.password_login import check_password_policy, set_password
+from app.services.password_login import (
+    TEMPORARY_PASSWORD_MINUTES,
+    check_password_policy,
+    new_temporary_password,
+    set_password,
+    set_temporary_password,
+)
 from app.services.principal import Actor
 from app.services.sessions import SessionService
 
@@ -136,6 +145,85 @@ async def reset_login_two_factor(login: str) -> str:
         return user.username or user.email or str(user.id)
 
 
+@dataclass(slots=True)
+class AccountReset:
+    user: User
+    password: str
+    valid_until: datetime
+    login_keys: int
+    vault_two_factor: bool
+    sessions_revoked: int
+    reactivated: bool
+
+
+async def reset_account(
+    login: str,
+    *,
+    password: str | None = None,
+    minutes: int = TEMPORARY_PASSWORD_MINUTES,
+    keep_vault_2fa: bool = False,
+) -> AccountReset:
+    """Accountherstel: MFA van het VaultX-login (en standaard van de kluis) weg, alle sessies
+    in, en een tijdelijk wachtwoord dat bij de eerste login vervangen moet worden.
+
+    De kluisversleuteling (master password) blijft altijd onaangeroerd: die kan een beheerder
+    niet resetten zonder dat de kluisinhoud verloren gaat."""
+    from app.models import VaultAccount
+    from app.services.vault_auth import clear_vault_two_factor
+    from app.services.webauthn import SCOPE_LOGIN, WebAuthnService
+
+    if minutes < 5 or minutes > 7 * 24 * 60:
+        raise VaultXError("De geldigheid moet tussen 5 minuten en 7 dagen liggen")
+    settings = get_settings()
+    temp = password if password is not None else new_temporary_password()
+    check_password_policy(settings, temp)
+    async with get_sessionmaker()() as db:
+        found = await _find_user(db, login)
+        user = await db.get(User, found.id, with_for_update=True)
+        assert user is not None
+        webauthn = WebAuthnService(db, settings)
+        login_keys = len(await webauthn.credentials(user.id, SCOPE_LOGIN))
+        await webauthn.delete_all(user.id, SCOPE_LOGIN)
+        user.login_recovery_code_hash = None
+        vault_2fa = False
+        account = await db.get(VaultAccount, user.id, with_for_update=True)
+        if account is not None and account.two_factor_enabled and not keep_vault_2fa:
+            await clear_vault_two_factor(db, settings, account)
+            vault_2fa = True
+        had_password = user.has_password
+        valid_until = set_temporary_password(user, temp, minutes)
+        reactivated = not user.is_active
+        user.is_active = True
+        # Alle sessies, ook die via Authentik: wie het account misbruikte, ligt eruit.
+        revoked = await SessionService(db, settings).revoke_for_user(user.id, "account_reset")
+        actor = Actor.system("cli", RequestMeta())
+        if vault_2fa:
+            await AuditService(db).record(
+                "vault.2fa.disable",
+                actor,
+                target_type="vault",
+                target_id=user.id,
+                details={"via": "accountherstel (cli)"},
+            )
+        await AuditService(db).record(
+            "user.account_reset",
+            actor,
+            target_type="user",
+            target_id=user.id,
+            details={
+                "had_password": had_password,
+                "temporary_until": valid_until.isoformat(),
+                "login_keys_removed": login_keys,
+                "vault_2fa_reset": vault_2fa,
+                "sessions_revoked": revoked,
+                "reactivated": reactivated,
+                "password_chosen_by_admin": password is not None,
+            },
+        )
+        await db.commit()
+        return AccountReset(user, temp, valid_until, login_keys, vault_2fa, revoked, reactivated)
+
+
 async def _find_user(db, login: str) -> User:
     name = login.strip().lower()
     matches = [
@@ -204,6 +292,33 @@ async def import_linkwarden(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_account_reset(res: AccountReset) -> None:
+    u = res.user
+    until = res.valid_until.astimezone().strftime("%d-%m-%Y %H:%M")
+    print(f"Account {u.username or u.email} is gereset.")
+    print()
+    print(f"  Tijdelijk wachtwoord:  {res.password}")
+    print(f"  Geldig tot:            {until} (daarna opnieuw resetten)")
+    print()
+    print("Geef dit wachtwoord persoonlijk door. Bij de eerste login kiest de gebruiker meteen een")
+    print("eigen wachtwoord; het tijdelijke geeft zelf geen toegang tot VaultX.")
+    print()
+    print(f"  - beveiligingssleutels voor het wachtwoordlogin weggehaald: {res.login_keys}")
+    print(
+        "  - tweestapsverificatie van de kluis (authenticator-app, sleutels, herstelcode): "
+        + ("uitgezet" if res.vault_two_factor else "stond niet aan of bewust behouden")
+    )
+    print(f"  - VaultX-sessies ingetrokken: {res.sessions_revoked}")
+    if res.reactivated:
+        print("  - het account was gedeactiveerd en is weer actief")
+    print()
+    print("Niet gereset: het master password van de kluis. Daarmee is de kluis versleuteld; een")
+    print("beheerder kan het niet resetten zonder dat de kluisinhoud verloren gaat. Kwijt? Dan blijft")
+    print("enkel de kluis opnieuw aanmaken over (Mijn kluis), met verlies van de items.")
+    print("De gebruiker stelt na het inloggen zelf opnieuw een beveiligingssleutel en de")
+    print("tweestapsverificatie van de kluis in. Alles staat in de auditlog (user.account_reset).")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="VaultX-accounts beheren")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -220,6 +335,27 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("email", help="E-mailadres van de kluis (login in de Bitwarden-apps)")
     r = sub.add_parser("reset-login-2fa", help="Beveiligingssleutels voor het wachtwoordlogin weghalen")
     r.add_argument("login", help="Gebruikersnaam of e-mailadres")
+    ra = sub.add_parser(
+        "reset-account",
+        help="Accountherstel: MFA weg en een tijdelijk wachtwoord, bij de eerste login te wijzigen",
+    )
+    ra.add_argument("login", help="Gebruikersnaam of e-mailadres")
+    ra.add_argument(
+        "--minutes",
+        type=int,
+        default=TEMPORARY_PASSWORD_MINUTES,
+        help=f"Zo lang werkt het tijdelijke wachtwoord (standaard {TEMPORARY_PASSWORD_MINUTES})",
+    )
+    ra.add_argument(
+        "--keep-vault-2fa",
+        action="store_true",
+        help="Tweestapsverificatie van de kluis (Bitwarden-apps) laten staan",
+    )
+    ra.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Zelf het tijdelijke wachtwoord geven (stdin) in plaats van er een te laten maken",
+    )
     li = sub.add_parser(
         "import-linkwarden",
         help="Links importeren uit een Linkwarden-database, Linkwarden-export (JSON) of bladwijzers (HTML)",
@@ -266,6 +402,25 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Fout: {exc.message}", file=sys.stderr)
             return 1
         print(f"OK: {email} logt in de Bitwarden-apps weer in met enkel het master password.")
+        return 0
+
+    if args.command == "reset-account":
+
+        async def run_account_reset() -> AccountReset:
+            try:
+                given = _read_password(True) if args.password_stdin else None
+                return await reset_account(
+                    args.login, password=given, minutes=args.minutes, keep_vault_2fa=args.keep_vault_2fa
+                )
+            finally:
+                await dispose_engine()
+
+        try:
+            res = asyncio.run(run_account_reset())
+        except VaultXError as exc:
+            print(f"Fout: {exc.message}", file=sys.stderr)
+            return 1
+        _print_account_reset(res)
         return 0
 
     if args.command == "reset-login-2fa":
