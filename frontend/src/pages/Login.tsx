@@ -62,83 +62,110 @@ function shellQuote(value: string): string {
 }
 
 /** Wat de beheerder op de VaultX-server uitvoert (Debian-container, als root). */
-export function resetCommand(login: string): string {
+export function resetCommand(code: string): string {
   return (
     "set -a; . /etc/vaultx/vaultx.env; set +a; cd /opt/vaultx/backend && " +
-    `/opt/vaultx/venv/bin/python -m app.cli reset-account ${shellQuote(login.trim())}`
+    `/opt/vaultx/venv/bin/python -m app.cli reset-account ${shellQuote(code)}`
+  );
+}
+
+interface ResetCode {
+  code: string;
+  expires_at: string;
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn btn-wide"
+      onClick={() => void navigator.clipboard?.writeText(text).then(() => setCopied(true))}
+    >
+      {copied ? "Gekopieerd" : label}
+    </button>
   );
 }
 
 /**
- * "Kan je niet inloggen?": toont enkel wat de beheerder moet uitvoeren. Er gaat niets naar de
- * server, dus de tekst is altijd dezelfde en verraadt niet of een account bestaat.
+ * "Kan je niet inloggen?": de server geeft een herstelcode voor een openstaand verzoek. Hij zoekt
+ * het account daarbij niet op, dus het antwoord is voor elke invoer hetzelfde.
  */
 function CannotLogIn({ initial, onBack }: { initial: string; onBack: () => void }) {
-  const [email, setEmail] = useState(initial.includes("@") ? initial : "");
-  const [shown, setShown] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const command = shown ? resetCommand(shown) : "";
+  const [login, setLogin] = useState(initial);
+  const [result, setResult] = useState<ResetCode | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setPending(true);
+    setError(null);
+    try {
+      setResult(await api.post<ResetCode>("/auth/password/reset-request", { login }));
+    } catch (err) {
+      setError(err);
+    } finally {
+      setPending(false);
+    }
+  };
+  if (!result) {
+    return (
+      <form className="form login-form" onSubmit={submit}>
+        <p className="muted">Wachtwoord vergeten, of je beveiligingssleutel kwijt?</p>
+        <label className="field">
+          <span>Je gebruikersnaam of e-mailadres</span>
+          <input
+            required
+            autoComplete="username"
+            autoFocus
+            maxLength={320}
+            value={login}
+            onChange={(e) => setLogin(e.target.value)}
+          />
+        </label>
+        <ErrorBox error={error} />
+        <button className="btn btn-primary btn-wide" disabled={pending}>
+          {pending ? "Bezig…" : "Herstelcode aanvragen"}
+        </button>
+        <button type="button" className="btn btn-ghost btn-wide" onClick={onBack}>
+          Terug naar inloggen
+        </button>
+      </form>
+    );
+  }
+  const command = resetCommand(result.code);
   return (
-    <>
-      <p className="muted">Wachtwoord vergeten, of je beveiligingssleutel kwijt?</p>
-      {!shown ? (
-        <form
-          className="form login-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setShown(email.trim());
-          }}
-        >
-          <label className="field">
-            <span>Je inlog-e-mailadres</span>
-            <input
-              required
-              type="email"
-              autoComplete="email"
-              autoFocus
-              maxLength={320}
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </label>
-          <button className="btn btn-primary btn-wide">Verder</button>
-          <button type="button" className="btn btn-ghost btn-wide" onClick={onBack}>
-            Terug naar inloggen
-          </button>
-        </form>
-      ) : (
-        <div className="login-form recovery">
-          <p>
-            Vraag aan je systeembeheerder om je account te resetten door dit commando uit te voeren op de VaultX-server
-            (als root):
-          </p>
-          <pre className="recovery-command" data-testid="reset-command">
-            {command}
-          </pre>
-          <button
-            type="button"
-            className="btn btn-wide"
-            onClick={() => {
-              void navigator.clipboard?.writeText(command).then(() => setCopied(true));
-            }}
-          >
-            {copied ? "Gekopieerd" : "Commando kopiëren"}
-          </button>
-          <p>
-            Je krijgt dan een <strong>tijdelijk wachtwoord</strong> waarmee je de toegang tot je account kan herstellen.
-            Het werkt één uur. Bij de eerste aanmelding kies je meteen een nieuw wachtwoord; daarna stel je je
-            tweestapsverificatie (beveiligingssleutel, authenticator-app) opnieuw in.
-          </p>
-          <p className="muted small">
-            Je kluis blijft versleuteld met je master password; dat kan niemand voor je resetten. Log je in via
-            Authentik? Dan regelt Authentik je wachtwoord en MFA.
-          </p>
-          <button type="button" className="btn btn-primary btn-wide" onClick={onBack}>
-            Terug naar inloggen
-          </button>
-        </div>
-      )}
-    </>
+    <div className="login-form recovery">
+      <div className="info-box small">
+        Je aanvraag is genoteerd. Als er een account bij deze gegevens hoort, kan je systeembeheerder het met
+        onderstaande code herstellen.
+      </div>
+      <p>Geef deze herstelcode aan je systeembeheerder:</p>
+      <pre className="recovery-command recovery-code" data-testid="reset-code">
+        {result.code}
+      </pre>
+      <CopyButton text={result.code} label="Code kopiëren" />
+      <p className="small">
+        De beheerder voert hiermee op de VaultX-server (als root) dit commando uit. De code werkt één keer en is geldig
+        tot {new Date(result.expires_at).toLocaleString("nl-BE", { dateStyle: "short", timeStyle: "short" })}.
+      </p>
+      <pre className="recovery-command" data-testid="reset-command">
+        {command}
+      </pre>
+      <CopyButton text={command} label="Commando kopiëren" />
+      <p>
+        Je krijgt dan een <strong>tijdelijk wachtwoord</strong> waarmee je de toegang tot je account kan herstellen. Het
+        werkt één uur. Bij de eerste aanmelding kies je meteen een nieuw wachtwoord; daarna stel je je
+        tweestapsverificatie (beveiligingssleutel, authenticator-app) opnieuw in.
+      </p>
+      <p className="muted small">
+        Je kluis blijft versleuteld met je master password; dat kan niemand voor je resetten. Log je in via Authentik?
+        Dan regelt Authentik je wachtwoord en MFA.
+      </p>
+      <button type="button" className="btn btn-primary btn-wide" onClick={onBack}>
+        Terug naar inloggen
+      </button>
+    </div>
   );
 }
 
@@ -411,13 +438,17 @@ export function LoginPage() {
               <button className="btn btn-primary btn-wide" disabled={pending}>
                 {pending ? "Bezig…" : "Inloggen"}
               </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-wide small"
-                onClick={() => (setHelp(true), setLoginError(null))}
+              <a
+                className="login-help-link small"
+                href="/login?herstel=1"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setHelp(true);
+                  setLoginError(null);
+                }}
               >
                 Wachtwoord vergeten of kan je niet inloggen?
-              </button>
+              </a>
             </form>
             {methods.authentik && (
               <div className="login-divider">

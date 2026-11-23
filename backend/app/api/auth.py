@@ -21,10 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CSRF_HEADER, DbSession, MetaDep, OIDCDep, SettingsDep
 from app.core.config import Settings
 from app.core.context import RequestMeta
-from app.core.errors import NotFoundError, PermissionDeniedError
+from app.core.errors import InvalidOperationError, NotFoundError, PermissionDeniedError
 from app.core.security import new_token, pkce_challenge
 from app.models import User
 from app.repositories import UserRepository
+from app.services import account_reset
 from app.services.audit import AuditService
 from app.services.identity import IdentityService
 from app.services.oidc import OIDCError
@@ -327,6 +328,30 @@ async def _password_session(
     resp = JSONResponse({"redirect_url": safe_next(next)})
     _session_cookie(resp, request, settings, token)
     return resp
+
+
+class ResetRequest(BaseModel):
+    login: str = Field(min_length=1, max_length=320, description="Gebruikersnaam of e-mailadres")
+
+
+@router.post(
+    "/password/reset-request",
+    summary="Kan niet inloggen: herstelcode voor de beheerder (zelfde antwoord voor elke login)",
+)
+async def password_reset_request(
+    data: ResetRequest, request: Request, db: DbSession, settings: SettingsDep, meta: MetaDep
+) -> Response:
+    if not settings.local_login_enabled:
+        raise NotFoundError("Inloggen met een wachtwoord staat uit")
+    if request.headers.get(CSRF_HEADER) != "1":
+        raise PermissionDeniedError("CSRF-header ontbreekt")
+    if not data.login.strip():
+        raise InvalidOperationError("Vul je gebruikersnaam of e-mailadres in")
+    # Het account wordt hier niet opgezocht: voor elke login hetzelfde antwoord, even snel.
+    res = await account_reset.create_request(db, data.login, meta)
+    return JSONResponse(
+        {"code": res.code, "expires_at": res.expires_at.isoformat()}, headers={"Cache-Control": "no-store"}
+    )
 
 
 class TemporaryPasswordChange(BaseModel):

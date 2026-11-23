@@ -70,17 +70,31 @@ Wachtwoord vergeten, of je beveiligingssleutel én herstelcode kwijt? Dan reset 
 account met één commando op de server. Er gaat geen e-mail uit.
 
 **Voor de gebruiker.** Op de gewone loginpagina (met automatisch doorsturen naar Authentik:
-`/login?lokaal=1`, of meteen `/login?herstel=1`) staat *Wachtwoord vergeten of kan je niet
-inloggen?*. Daar vul je je inlog-e-mailadres in en krijg je het commando dat je beheerder moet
-uitvoeren. Die pagina vraagt de server niets: de tekst is dus altijd dezelfde, of het account nu
-bestaat of niet, en niemand kan er e-mailadressen mee uitproberen.
+`/login?lokaal=1`, of meteen `/login?herstel=1`) staat de link *Wachtwoord vergeten of kan je niet
+inloggen?*. Daar vul je je gebruikersnaam of e-mailadres in en klik je *Herstelcode aanvragen*.
+Je krijgt een **herstelcode** zoals `carol@example.com.K7QM-3XPA-9D2F-HJ4N`, met het commando
+voor je beheerder erbij. Geef de code aan je beheerder.
 
-**Voor de beheerder**, op de VaultX-server (bij een ClusterForge-cluster op één van de nodes) als root:
+- De code hoort bij een openstaand verzoek op de server: 24 uur geldig, werkt één keer, en een
+  nieuwe aanvraag voor dezelfde login maakt de vorige ongeldig. In de database staat enkel een
+  hash van het geheime deel. Een zelfverzonnen code (andere naam, ander geheim deel) werkt niet.
+- Elke invoer krijgt dezelfde bevestiging en een code van dezelfde vorm: de server zoekt het
+  account bij de aanvraag niet op. Zo kan niemand er e-mailadressen mee uitproberen.
+- Hoogstens 500 openstaande verzoeken tegelijk; daarboven wordt een code wel getoond maar niet
+  bewaard (bescherming tegen iemand die de tabel volschrijft).
+
+**Voor de beheerder**: plak de code in één commando op de VaultX-server (bij een
+ClusterForge-cluster op één van de nodes), als root. De loginpagina toont het volledige commando:
 
 ```bash
 set -a; . /etc/vaultx/vaultx.env; set +a; cd /opt/vaultx/backend && \
-  /opt/vaultx/venv/bin/python -m app.cli reset-account jij@jouwdomein.be
+  /opt/vaultx/venv/bin/python -m app.cli reset-account 'carol@example.com.K7QM-3XPA-9D2F-HJ4N'
 ```
+
+VaultX zoekt het account bij het verzoek, toont wie het is, wanneer en vanaf welk adres de code
+werd aangevraagd, en meteen het tijdelijke wachtwoord. Geef dat wachtwoord enkel aan de persoon
+zelf: wie de code inlevert, is nog niet bewezen de eigenaar van het account. Zonder code kan het
+ook rechtstreeks: `reset-account --login carol@example.com`.
 
 Dat doet in één keer:
 
@@ -93,7 +107,8 @@ Dat doet in één keer:
   herstelcode voor de Bitwarden-apps), tenzij je `--keep-vault-2fa` meegeeft;
 - **alle VaultX-sessies** van de gebruiker intrekken, ook die via Authentik, en een
   vergrendeling na foute wachtwoorden opheffen (een gedeactiveerd account wordt weer actief);
-- alles in de **auditlog** zetten (`user.account_reset`, met wat er gereset is; daarna
+- alles in de **auditlog** zetten (`user.account_reset`, met wat er gereset is en het verzoek
+  achter de code; daarna
   `user.password_change` als de gebruiker een eigen wachtwoord kiest).
 
 Zelf het tijdelijke wachtwoord kiezen kan met `--password-stdin`. Geef het tijdelijke wachtwoord

@@ -1,3 +1,4 @@
+from app.models.account_reset import AccountResetRequest
 from app.models.api_key import ApiKey
 from app.models.audit import AuditLog
 from app.models.base import Base
@@ -22,6 +23,7 @@ from app.models.vault import KdfType, VaultAccount, VaultAttachment, VaultCipher
 from app.models.webauthn import WebAuthnCredential
 
 __all__ = [
+    "AccountResetRequest",
     "ApiKey",
     "AppSource",
     "AppLogin",

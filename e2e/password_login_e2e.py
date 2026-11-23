@@ -5,8 +5,8 @@ een beheerder (via Authentik) maakt een gewoon account aan en geeft zichzelf een
 de nieuwe gebruiker logt in met gebruikersnaam en wachtwoord (eerst fout), wijzigt zijn
 wachtwoord en logt uit zonder langs Authentik te gaan; de beheerder logt daarna met zijn
 wachtwoord in en komt in hetzelfde account als via Authentik. Tot slot accountherstel: Carol
-kan niet meer inloggen, krijgt op de loginpagina het commando voor de beheerder, die voert
-`app.cli reset-account` uit, en Carol kiest met het tijdelijke wachtwoord een nieuw.
+kan niet meer inloggen, vraagt op de loginpagina een herstelcode, de beheerder plakt die in
+`app.cli reset-account <code>`, en Carol kiest met het tijdelijke wachtwoord een nieuw.
 
     cd frontend && npm ci && npm run build && cd ..
     VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \\
@@ -187,27 +187,30 @@ def main() -> None:
             expect(jonas.get_by_text("wachtwoord", exact=True).first).to_be_visible()
             shot(jonas, "07-sessies-authentik-en-wachtwoord")
 
-            step("Accountherstel: Carol kan niet meer inloggen")
+            step("Accountherstel: Carol kan niet meer inloggen en vraagt een herstelcode")
             carol = new_page()
             carol.goto(f"{ui}/login?lokaal=1")
-            carol.get_by_role("button", name="Wachtwoord vergeten of kan je niet inloggen?").click()
-            carol.get_by_label("Je inlog-e-mailadres").fill("carol@example.com")
+            carol.get_by_role("link", name="Wachtwoord vergeten of kan je niet inloggen?").click()
+            carol.get_by_label("Je gebruikersnaam of e-mailadres").fill("carol@example.com")
             shot(carol, "08-kan-niet-inloggen")
-            carol.get_by_role("button", name="Verder").click()
+            carol.get_by_role("button", name="Herstelcode aanvragen").click()
+            code = carol.get_by_test_id("reset-code").inner_text().strip()
+            assert code.startswith("carol@example.com."), code
             command = carol.get_by_test_id("reset-command").inner_text()
-            assert command.endswith("app.cli reset-account 'carol@example.com'"), command
-            expect(carol.get_by_text("tijdelijk wachtwoord")).to_be_visible()
-            shot(carol, "09-commando-voor-beheerder")
-            # Zelfde tekst voor een adres dat niet bestaat (de pagina vraagt de server niets).
+            assert command.endswith(f"app.cli reset-account '{code}'"), command
+            confirmation = carol.locator(".info-box").last.inner_text()
+            shot(carol, "09-herstelcode-voor-beheerder")
+            # Zelfde bevestiging voor een login zonder account (geen account-enumeratie).
             other = new_page()
             other.goto(f"{ui}/login?herstel=1")
-            other.get_by_label("Je inlog-e-mailadres").fill("bestaat.niet@example.com")
-            other.get_by_role("button", name="Verder").click()
-            expect(other.get_by_test_id("reset-command")).to_contain_text("'bestaat.niet@example.com'")
+            other.get_by_label("Je gebruikersnaam of e-mailadres").fill("bestaat.niet@example.com")
+            other.get_by_role("button", name="Herstelcode aanvragen").click()
+            expect(other.get_by_test_id("reset-code")).to_contain_text("bestaat.niet@example.com.")
+            assert other.locator(".info-box").last.inner_text() == confirmation
 
-            step("Beheerder voert het commando uit")
+            step("Beheerder plakt de code in het commando")
             out = subprocess.run(
-                [sys.executable, "-m", "app.cli", "reset-account", "carol@example.com"],
+                [sys.executable, "-m", "app.cli", "reset-account", code],
                 cwd=BACKEND,
                 env=env,
                 check=True,

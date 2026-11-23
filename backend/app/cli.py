@@ -4,7 +4,7 @@
     python -m app.cli set-password jonas
     python -m app.cli reset-vault-2fa jonas@example.com    # telefoon, sleutels en herstelcode kwijt
     python -m app.cli reset-login-2fa jonas                # sleutel voor het wachtwoordlogin kwijt
-    python -m app.cli reset-account jonas@example.com      # kan niet inloggen: MFA weg + tijdelijk wachtwoord
+    python -m app.cli reset-account '<herstelcode>'          # kan niet inloggen: code van de loginpagina
     python -m app.cli import-linkwarden --dsn postgresql://linkwarden@db/linkwarden --to jonas
 
 Het wachtwoord wordt gevraagd (twee keer, zonder echo) of met --password-stdin van stdin gelezen.
@@ -154,11 +154,14 @@ class AccountReset:
     vault_two_factor: bool
     sessions_revoked: int
     reactivated: bool
+    requested_at: datetime | None = None
+    requested_from: str | None = None
 
 
 async def reset_account(
-    login: str,
+    login: str | None = None,
     *,
+    code: str | None = None,
     password: str | None = None,
     minutes: int = TEMPORARY_PASSWORD_MINUTES,
     keep_vault_2fa: bool = False,
@@ -167,8 +170,13 @@ async def reset_account(
     in, en een tijdelijk wachtwoord dat bij de eerste login vervangen moet worden.
 
     De kluisversleuteling (master password) blijft altijd onaangeroerd: die kan een beheerder
-    niet resetten zonder dat de kluisinhoud verloren gaat."""
+    niet resetten zonder dat de kluisinhoud verloren gaat.
+
+    Met ``code``: de herstelcode die de gebruiker op de loginpagina kreeg (eenmalig, 24 uur
+    geldig); het account volgt uit het openstaande verzoek. Zonder code: ``login`` rechtstreeks.
+    """
     from app.models import VaultAccount
+    from app.services import account_reset
     from app.services.vault_auth import clear_vault_two_factor
     from app.services.webauthn import SCOPE_LOGIN, WebAuthnService
 
@@ -177,8 +185,21 @@ async def reset_account(
     settings = get_settings()
     temp = password if password is not None else new_temporary_password()
     check_password_policy(settings, temp)
+    if (code is None) == (login is None):
+        raise VaultXError("Geef een herstelcode of (met --login) een gebruikersnaam of e-mailadres")
     async with get_sessionmaker()() as db:
-        found = await _find_user(db, login)
+        request = await account_reset.redeem(db, code) if code is not None else None
+        try:
+            found = await _find_user(db, request.login if request else login)
+        except VaultXError:
+            if request is None:
+                raise
+            # De code was echt, maar bij die login hoort geen (eenduidig) account. Code is op.
+            await db.commit()
+            raise VaultXError(
+                f"De code is geldig, maar er is geen eenduidig VaultX-account voor {request.login!r}. "
+                "Er is niets gewijzigd."
+            ) from None
         user = await db.get(User, found.id, with_for_update=True)
         assert user is not None
         webauthn = WebAuthnService(db, settings)
@@ -218,10 +239,30 @@ async def reset_account(
                 "sessions_revoked": revoked,
                 "reactivated": reactivated,
                 "password_chosen_by_admin": password is not None,
+                "via": "herstelcode" if request else "login",
+                **(
+                    {
+                        "request_id": str(request.id),
+                        "requested_at": request.created_at.isoformat(),
+                        "requested_from": request.ip_address,
+                    }
+                    if request
+                    else {}
+                ),
             },
         )
         await db.commit()
-        return AccountReset(user, temp, valid_until, login_keys, vault_2fa, revoked, reactivated)
+        return AccountReset(
+            user,
+            temp,
+            valid_until,
+            login_keys,
+            vault_2fa,
+            revoked,
+            reactivated,
+            request.created_at if request else None,
+            request.ip_address if request else None,
+        )
 
 
 async def _find_user(db, login: str) -> User:
@@ -295,7 +336,10 @@ async def import_linkwarden(args: argparse.Namespace) -> int:
 def _print_account_reset(res: AccountReset) -> None:
     u = res.user
     until = res.valid_until.astimezone().strftime("%d-%m-%Y %H:%M")
-    print(f"Account {u.username or u.email} is gereset.")
+    print(f"Account {u.username or u.email} ({u.email or '-'}) is gereset.")
+    if res.requested_at is not None:
+        when = res.requested_at.astimezone().strftime("%d-%m-%Y %H:%M")
+        print(f"Herstelcode aangevraagd op {when} vanaf {res.requested_from or 'onbekend adres'}.")
     print()
     print(f"  Tijdelijk wachtwoord:  {res.password}")
     print(f"  Geldig tot:            {until} (daarna opnieuw resetten)")
@@ -339,7 +383,12 @@ def main(argv: list[str] | None = None) -> int:
         "reset-account",
         help="Accountherstel: MFA weg en een tijdelijk wachtwoord, bij de eerste login te wijzigen",
     )
-    ra.add_argument("login", help="Gebruikersnaam of e-mailadres")
+    ra.add_argument(
+        "code",
+        nargs="?",
+        help="Herstelcode die de gebruiker op de loginpagina kreeg (login.XXXX-XXXX-XXXX-XXXX)",
+    )
+    ra.add_argument("--login", help="Zonder code: gebruikersnaam of e-mailadres rechtstreeks")
     ra.add_argument(
         "--minutes",
         type=int,
@@ -410,7 +459,11 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 given = _read_password(True) if args.password_stdin else None
                 return await reset_account(
-                    args.login, password=given, minutes=args.minutes, keep_vault_2fa=args.keep_vault_2fa
+                    args.login,
+                    code=args.code,
+                    password=given,
+                    minutes=args.minutes,
+                    keep_vault_2fa=args.keep_vault_2fa,
                 )
             finally:
                 await dispose_engine()
