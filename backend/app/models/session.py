@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,6 +26,10 @@ class UserSession(Base):
     oidc_sid: Mapped[str | None] = mapped_column(String(255), index=True)
     # Nodig als id_token_hint bij RP-initiated logout.
     id_token: Mapped[str | None] = mapped_column(Text)
+    # Wat Authentik over de aanmelding zei (ID-token): MFA gebruikt (claim amr) en wanneer de
+    # gebruiker zich bij Authentik aanmeldde (auth_time). Nodig voor ontgrendelen met Authentik.
+    mfa: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    idp_auth_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ip_address: Mapped[str | None] = mapped_column(String(64))
     user_agent: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(

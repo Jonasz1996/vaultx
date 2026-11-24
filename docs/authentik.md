@@ -93,6 +93,35 @@ nooit door.
 | `VAULTX_OIDC_SILENT_LOGIN` | `true` | eerst stil proberen (prompt=none) |
 | `VAULTX_OIDC_AUTO_REDIRECT` | leeg = aan als de gewone login uit staat | zonder Authentik-sessie meteen naar het aanmelden |
 
+## Kluis openen met Authentik (VaultX Invuller)
+
+De extensie [VaultX Invuller](invuller.md) kan de kluis openen zonder master
+password zolang je via Authentik bij VaultX aangemeld bent. Dat vraagt:
+
+- een VaultX-sessie die via Authentik begon (niet met het wachtwoord van
+  VaultX, niet via een API-sleutel of de Bitwarden-apps);
+- **MFA** in die Authentik-login. VaultX leest dat uit de claim `amr` van het
+  ID-token (`mfa`, `otp`, `hwk`, `swk` of `sc`). In Authentik: zet een stage
+  "Authenticator validation" in de authenticatie-flow en geef de gebruiker een
+  authenticator-app of beveiligingssleutel. De standaard-flow doet dat al
+  zodra de gebruiker een apparaat heeft;
+- een Authentik-login van hoogstens 12 uur geleden (`auth_time`).
+
+| Instelling | Standaard | Betekenis |
+|---|---|---|
+| `VAULTX_DEVICE_UNLOCK` | `true` | Uit = geen enkel apparaat opent nog met Authentik |
+| `VAULTX_DEVICE_UNLOCK_REQUIRE_MFA` | `true` | MFA in Authentik verplicht |
+| `VAULTX_DEVICE_UNLOCK_MAX_AUTH_AGE_HOURS` | `12` | Hoe oud de Authentik-login mag zijn |
+
+Per gebruiker staat het aan of uit bij **Mijn kluis → Ontgrendelen met
+Authentik**; daar staan ook de apparaten, met "laatst geopend", en kan je ze
+intrekken. Uitzetten of je master password wijzigen trekt alle apparaten in.
+Elke opening en elke weigering staat in de auditlog.
+
+De sleutel blijft op het apparaat: VaultX bewaart enkel de user key,
+versleuteld met een willekeurige sleutel van de extensie. VaultX alleen kan
+de kluis dus niet openen, en de extensie alleen ook niet.
+
 ## Uitloggen
 
 - Uitloggen in VaultX trekt de VaultX-sessie in en stuurt de browser naar het

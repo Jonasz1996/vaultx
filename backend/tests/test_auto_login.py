@@ -121,3 +121,15 @@ async def test_normal_login_error_is_still_an_error(make_client):
     await c.get("/auth/login")
     r = await c.get("/auth/callback", params={"error": "login_required", "state": "x"})
     assert "error=idp_error" in r.headers["location"]
+
+
+async def test_silent_only_never_shows_the_idp_login(make_client, not_logged_in_at_idp, monkeypatch):
+    # VaultX Invuller opent een tabblad op de achtergrond: nooit het aanmeldscherm, ook niet met
+    # automatisch doorsturen, en ook als de stille login voor de webpagina uit staat.
+    monkeypatch.setattr(get_settings(), "local_login_enabled", False)
+    monkeypatch.setattr(get_settings(), "oidc_silent_login", False)
+    c = await make_client()
+    r = await c.get("/auth/login", params={"silent": "only"})
+    assert parse_qs(urlsplit(r.headers["location"]).query)["prompt"] == ["none"]
+    r = await _follow_to_idp(c, "/auth/login?silent=only&next=/api/v1/me")
+    assert r.headers["location"] == "/login?stil=1&next=%2Fapi%2Fv1%2Fme"

@@ -50,6 +50,7 @@ from app.repositories import (
 from app.schemas.vault import VaultEnroll, VaultPasswordChange
 from app.services import totp
 from app.services.audit import AuditService
+from app.services.device_unlock import revoke_all
 from app.services.principal import Principal
 from app.services.vault_auth import (
     VaultCaller,
@@ -318,12 +319,20 @@ class VaultService:
             if device.revoked_at is None:
                 device.revoked_at = now
                 revoked += 1
+        # Ontgrendelen met Authentik: de user key blijft dezelfde, dus de blobs zouden nog werken.
+        # Toch intrekken, zodat een gelekte apparaatsleutel na een wachtwoordwissel niets meer opent.
+        unlocks = await revoke_all(self.db, account.user_id, "password_change")
         await self.audit.record(
             "vault.password.change",
             p.actor,
             target_type="vault",
             target_id=p.user.id,
-            details={"kdf": data.kdf, "kdf_iterations": data.kdf_iterations, "devices_signed_out": revoked},
+            details={
+                "kdf": data.kdf,
+                "kdf_iterations": data.kdf_iterations,
+                "devices_signed_out": revoked,
+                "device_unlocks_revoked": unlocks,
+            },
         )
         await publish(self.db, account.user_id, PushType.LOG_OUT)
         await self.db.commit()

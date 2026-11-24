@@ -106,11 +106,24 @@
       "form",
       {},
       h("p", {}, "Kluis vergrendeld."),
+      status.lockReason ? h("p", { class: "warn small" }, status.lockReason) : null,
       h("p", { class: "muted small" }, `${status.email} op ${status.server}`),
+      status.authentik.registered && !status.manualLock
+        ? h("p", { class: "small" }, "Ontgrendelen met Authentik lukte nu niet. ",
+            status.authentik.message ? h("span", { class: "muted" }, status.authentik.message) : null)
+        : null,
       field("Master password", { name: "password", type: "password", required: true, autofocus: true, autocomplete: "current-password" }),
       err,
       h("button", { class: "primary", type: "submit" }, "Ontgrendelen"),
-      h("div", { class: "row" }, h("button", { type: "button", onclick: () => call("vx-logout").then(refresh) }, "Afmelden")),
+      h(
+        "div",
+        { class: "row" },
+        status.authentik.registered
+          ? h("button", { type: "button", onclick: () => call("vx-unlock-authentik").then(refresh) },
+              status.manualLock ? "Ontgrendelen met Authentik" : "Opnieuw met Authentik")
+          : null,
+        h("button", { type: "button", onclick: () => call("vx-logout").then(refresh) }, "Afmelden"),
+      ),
     );
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -157,7 +170,12 @@
     return h(
       "div",
       {},
-      h("p", { class: "small" }, `Ontgrendeld · ${status.count} logins · gesynchroniseerd ${ago(status.syncedAt)}`),
+      h("p", { class: "small" }, `Ontgrendeld${status.authentik.via === "authentik" ? " met Authentik" : ""} · ${status.count} logins · gesynchroniseerd ${ago(status.syncedAt)}`),
+      status.authentik.registered
+        ? h("p", { class: "muted small" }, "Ontgrendelen met Authentik staat aan op deze browser.")
+        : status.authentik.message
+          ? h("p", { class: "warn small" }, `Ontgrendelen met Authentik: ${status.authentik.message}`)
+          : null,
       list,
       err,
       h(

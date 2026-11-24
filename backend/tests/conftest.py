@@ -132,6 +132,7 @@ class VaultXClient(httpx.AsyncClient):
         groups: list[str] | None = None,
         name: str | None = None,
         next: str = "/",
+        extra: dict[str, Any] | None = None,
     ) -> httpx.Response:
         self.fake.next_claims = {
             "sub": sub,
@@ -140,6 +141,7 @@ class VaultXClient(httpx.AsyncClient):
             "preferred_username": sub,
             "name": name or sub.title(),
             "groups": groups or [],
+            **(extra or {}),
         }
         r = await self.get("/auth/login", params={"next": next})
         assert r.status_code == 303, r.text

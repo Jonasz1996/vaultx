@@ -8,6 +8,7 @@ import ipaddress
 import json
 import logging
 import re
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
@@ -125,12 +126,14 @@ async def login(
     settings: SettingsDep,
     oidc: OIDCDep,
     next: str | None = None,
-    silent: bool = False,
+    silent: str | None = None,
 ) -> Response:
     """Naar Authentik. Met ``silent=1`` eerst stil (prompt=none): wie daar al aangemeld is, komt
-    zonder klik terug; anders volgt het echte aanmelden of de loginpagina (zie callback)."""
+    zonder klik terug; anders volgt het echte aanmelden of de loginpagina (zie callback).
+    ``silent=only`` (VaultX Invuller): enkel stil, nooit het aanmeldscherm van Authentik."""
     next = safe_next(next)
-    silent = silent and settings.oidc_silent_login
+    only = silent == "only"
+    silent = only or (silent in ("1", "true") and settings.oidc_silent_login)
     origin = _authentik_origin(request, settings)
     if origin is None:
         # Authentik stuurt enkel terug naar een geregistreerde redirect-URI. Niet stilletjes naar
@@ -153,7 +156,14 @@ async def login(
     resp.set_cookie(
         STATE_COOKIE,
         _serializer(settings).dumps(
-            {"s": state, "n": nonce, "v": verifier, "next": next, "r": redirect_uri, "q": silent}
+            {
+                "s": state,
+                "n": nonce,
+                "v": verifier,
+                "next": next,
+                "r": redirect_uri,
+                "q": "only" if only else silent,
+            }
         ),
         max_age=STATE_MAX_AGE,
         path="/auth",
@@ -203,7 +213,7 @@ async def callback(
         # Ook bij een ander antwoord: het echte aanmelden toont dan zelf wat er mis is.
         if error not in SILENT_LOGIN_ERRORS:
             log.info("Stille Authentik-login: onverwacht antwoord %r", error[:40])
-        if settings.oidc_auto_redirect_enabled:
+        if settings.oidc_auto_redirect_enabled and saved["q"] != "only":
             resp = RedirectResponse(f"/auth/login?{urlencode({'next': saved['next']})}", status_code=303)
         else:
             query = {"stil": "1"}
@@ -238,7 +248,12 @@ async def callback(
         try:
             result = await IdentityService(db, settings).login_from_claims(claims, meta)
             token, _ = await SessionService(db, settings).create(
-                result.user, meta=meta, oidc_sid=claims.get("sid"), id_token=tokens["id_token"]
+                result.user,
+                meta=meta,
+                oidc_sid=claims.get("sid"),
+                id_token=tokens["id_token"],
+                mfa=used_mfa(claims),
+                idp_auth_time=auth_time(claims),
             )
             await db.commit()
             break
@@ -254,6 +269,25 @@ async def callback(
     resp.delete_cookie(STATE_COOKIE, path="/auth")
     _session_cookie(resp, request, settings, token)
     return resp
+
+
+# Waarden van de claim "amr" (RFC 8176) die op een tweede factor wijzen. Authentik zet "mfa"
+# zodra de flow een authenticator-stap had (TOTP, WebAuthn, Duo, statische codes).
+MFA_AMR = {"mfa", "otp", "hwk", "swk", "sc"}
+
+
+def used_mfa(claims: dict[str, Any]) -> bool:
+    amr = claims.get("amr")
+    return isinstance(amr, list) and any(isinstance(a, str) and a in MFA_AMR for a in amr)
+
+
+def auth_time(claims: dict[str, Any]) -> datetime | None:
+    """Wanneer de gebruiker zich bij Authentik aanmeldde (auth_time, anders iat)."""
+    for key in ("auth_time", "iat"):
+        value = claims.get(key)
+        if isinstance(value, int | float) and value > 0:
+            return datetime.fromtimestamp(value, UTC)
+    return None
 
 
 def _session_cookie(resp: Response, request: Request, settings: Settings, token: str) -> None:

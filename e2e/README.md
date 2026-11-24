@@ -194,3 +194,20 @@ cd frontend && npm ci && npm run build && cd ..
 VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
   python e2e/sso_e2e.py --authentik http://localhost:9000 --authentik-token <beheertoken> ./sso-shots
 ```
+
+# Kluis openen met Authentik (VaultX Invuller, echte Authentik)
+
+`device_unlock_e2e.py` geeft een Authentik-gebruiker een authenticator-app
+(via `docker exec` in de container van de Authentik-server, `--ak-container`,
+standaard `ak-server`), meldt die met MFA aan bij VaultX en stelt de extensie
+in. Het controleert: na het ontgrendelen met het master password registreert
+de extensie zich; zelf vergrendeld blijft dicht; na het slot van 12 uur en
+zonder VaultX-sessie opent de extensie de kluis stil via Authentik en vult in;
+zonder MFA weigert VaultX en zegt de extensie waarom; een ingetrokken apparaat
+vraagt het master password; en met Authentik gestopt werkt het master password
+gewoon. Het script stopt en start de Authentik-server zelf.
+
+```bash
+cd backend && VAULTX_DATABASE_URL=postgresql+psycopg://vaultx:vaultx@localhost:5432/vaultx_e2e \
+  python ../e2e/device_unlock_e2e.py --authentik http://localhost:9000 --authentik-token <beheertoken> ../du-shots
+```
