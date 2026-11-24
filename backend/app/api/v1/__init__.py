@@ -6,6 +6,7 @@ from app.api.v1 import (
     authentik,
     catalog,
     device_unlock,
+    fill_insights,
     links,
     me,
     notes,
@@ -21,6 +22,7 @@ api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(me.router)
 api_router.include_router(vault.router)
 api_router.include_router(device_unlock.router)
+api_router.include_router(fill_insights.router)
 api_router.include_router(notes.router)
 api_router.include_router(links.router)
 api_router.include_router(users.router)

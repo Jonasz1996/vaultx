@@ -88,6 +88,27 @@ Voeg in het item (webkluis of Bitwarden-app) een eigen veld toe:
 
 Items met **Master password opnieuw vragen** vult de extensie nooit in.
 
+## Overzicht op Mijn kluis
+
+Bij **Mijn kluis → Apps, apparaten en beveiliging** staat de kaart
+**VaultX Invuller**:
+
+- welke items de extensie de laatste 30 dagen invulde, per host, en hoe vaak;
+- logins die mislukten na invullen ("wachtwoord klopt niet meer?");
+- login-items die de extensie niet kan invullen omdat ze geen adres hebben, en
+  items met enkel een `http://`-adres (het wachtwoord gaat dan onversleuteld
+  over het netwerk).
+
+De extensie meldt enkel het id van het item en de host van de pagina (bv.
+`grafana.example.com`), nooit een naam, gebruikersnaam, wachtwoord of
+volledige URL. Namen en de items zonder adres ziet de kaart pas als de
+webkluis open is: die ontsleutelt alles in je browser. Ouder dan 30 dagen
+ruimt VaultX op. Ligt VaultX plat, dan stuurt de extensie het later.
+
+In de [lees-API voor je dashboard](dashboard-api.md) staan onder `invuller`
+het aantal browsers dat met Authentik ontgrendelt en de invullingen van de
+laatste 24 uur.
+
 ## Veiligheidsregels
 
 - Enkel op **exact dezelfde host en poort** als een adres (URI) van het item.

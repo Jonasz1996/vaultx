@@ -266,6 +266,8 @@ async function logout() {
     if (du) await webRequest("DELETE", `${UNLOCK_API}/${du.id}`).catch(() => undefined);
     await local.remove("deviceUnlock");
     await local.remove("deviceUnlockInfo");
+    await flushFills().catch(() => undefined);
+    await local.remove("fillLog");
     await ext.storage.session.clear();
     await local.remove("auth");
     await local.remove("vault");
@@ -604,6 +606,39 @@ async function recordFailure(item, sender) {
   const failures = (await local.get("failures")) || {};
   failures[item.id] = { host: new URL(sender.url).host, at: Date.now(), revision: item.revisionDate };
   await local.set("failures", failures);
+  await reportFill(item, sender, "failed");
+}
+
+// ------------------------------------------------------------------ inzicht (Mijn kluis)
+
+const FILL_LOG_MAX = 500;
+let flushTimer = null;
+
+/**
+ * Onthouden dat een item ingevuld werd (of dat de login daarna mislukte), voor het overzicht op
+ * Mijn kluis. Enkel het id van het item en de host van de pagina, nooit inhoud.
+ */
+async function reportFill(item, sender, kind) {
+  const log = (await local.get("fillLog")) || [];
+  log.push({ item_id: item.id, host: new URL(sender.url).host, kind, at: new Date().toISOString() });
+  await local.set("fillLog", log.slice(-FILL_LOG_MAX));
+  clearTimeout(flushTimer);
+  flushTimer = setTimeout(() => flushFills().catch(() => undefined), 2000);
+}
+
+/** Naar VaultX sturen; lukt dat niet (VaultX plat), dan bij de volgende synchronisatie. */
+async function flushFills() {
+  const log = (await local.get("fillLog")) || [];
+  if (!log.length || !(await local.get("auth"))) return;
+  const batch = log.slice(0, 200);
+  try {
+    await api("POST", "/api/vaultx/fill-events", { events: batch });
+  } catch (err) {
+    // Een oude server zonder deze route of een geweigerde melding: niet blijven proberen.
+    if (!(err instanceof ApiError) || err.status === 401 || err.status >= 500) throw err;
+  }
+  const rest = ((await local.get("fillLog")) || []).slice(batch.length);
+  await local.set("fillLog", rest);
 }
 
 /** De content script meldt een loginformulier (stap username, password of totp). */
@@ -650,6 +685,7 @@ async function fillAnswer(item, stage, sender, chosenByUser) {
   if (!creds) return { mode: "none" };
   const submit = item.submit;
   if (submit) submits.set(pageKey(sender, stage), { at: Date.now(), itemId: item.id });
+  await reportFill(item, sender, "fill");
   return { mode: "fill", item: publicItem(item), creds, submit, chosenByUser };
 }
 
@@ -743,6 +779,7 @@ ext.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "sync" && (await local.get("auth"))) {
     sync().catch(() => undefined);
     checkAuthentikUnlock().catch(() => undefined);
+    flushFills().catch(() => undefined);
   }
   if (alarm.name === "hub") connectHub();
 });

@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import type { VaultStatus, WebAuthnOptions } from "../api/types";
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, Stat } from "../components/ui";
 import { DeviceUnlockCard } from "../components/deviceUnlock";
+import { FillInsightCard } from "../components/fillInsights";
 import { formatDate, relative } from "../format";
 import { WebVault } from "./VaultItems";
 import {
@@ -232,6 +233,7 @@ function Enrolled({ s, onChange }: { s: VaultStatus; onChange: () => void }) {
         )}
       </Card>
       <DeviceUnlockCard />
+      <FillInsightCard />
       <Card title="Details">
         <dl className="kv">
           <dt>Login</dt>
